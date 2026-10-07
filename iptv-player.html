@@ -308,7 +308,7 @@ function teardown(){
 }
 function guess(u){
  const p=u.split('?')[0].toLowerCase();
- if(/\/live\/[^/]+\/[^/]+\/\d+\.(m3u8|ts)$/.test(p))return /\.m3u8$/.test(p)?['hls','native','tsalt']:['ts','hlsalt'];
+ if(/\/live\/[^/]+\/[^/]+\/\d+\.(m3u8|ts)$/.test(p))return /\.m3u8$/.test(p)?['tsalt','hls','native']:['ts','hlsalt'];
  if(/\.m3u8?$/.test(p)||/m3u8/.test(u.toLowerCase()))return['hls','native','ts'];
  if(/\.flv$/.test(p))return['flv','direct'];
  if(/\.(mp4|m4v|webm|ogv|ogg|mov|mkv|avi|wmv|mpg|mp3|aac|m4a)$/.test(p))return['direct'];
@@ -386,7 +386,7 @@ function tryMode(orig,modes,k){
  }else if(m==='ts'||m==='flv'||m==='tsalt'){
   const turl=m==='tsalt'?px(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):url;
   if(window.mpegts&&mpegts.isSupported()){
-   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:1048576,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
+   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
    mp.on(mpegts.Events.ERROR,(t,d)=>{lastErr=d||t||'';bad()});
    go();
@@ -404,7 +404,7 @@ function reconnect(why){
 }
 setInterval(()=>{ /* watchdog: never-started streams advance to the next mode; frozen picture reconnects */
  if(!sess||sess.vod)return;
- if(!sess.started){if(Date.now()-sess.lastTs>12000)tryMode(sess.orig,sess.modes,sess.k+1);return}
+ if(!sess.started){const mm=sess.modes[sess.k]||'';if(Date.now()-sess.lastTs>(/^(ts|tsalt|flv)$/.test(mm)?30000:12000))tryMode(sess.orig,sess.modes,sess.k+1);return}
  if(v.paused||v.seeking)return;
  if(Date.now()-sess.lastTs>10000)reconnect('stalled');
 },2000);
