@@ -404,7 +404,8 @@ function reconnect(why){
 }
 setInterval(()=>{ /* frozen picture watchdog */
  if(!sess||sess.vod||v.paused||v.seeking)return;
- if(Date.now()-sess.lastTs>(sess.started?10000:25000))reconnect('stalled');
+ if(!sess.started){if(Date.now()-sess.lastTs>12000)tryMode(sess.orig,sess.modes,sess.k+1);return}
+ if(Date.now()-sess.lastTs>10000)reconnect('stalled');
 },2000);
 v.addEventListener('ended',()=>{if(!sess)return;if(sess.vod){if(mode==='episodes')step(1)}else reconnect('stream ended')});
 addEventListener('online',()=>{if(sess&&!sess.vod)reconnect('back online')});
