@@ -308,6 +308,7 @@ function teardown(){
 }
 function guess(u){
  const p=u.split('?')[0].toLowerCase();
+ if(/\/live\/[^/]+\/[^/]+\/\d+\.(m3u8|ts)$/.test(p))return /\.m3u8$/.test(p)?['hls','native','tsalt']:['ts','hlsalt'];
  if(/\.m3u8?$/.test(p)||/m3u8/.test(u.toLowerCase()))return['hls','native','ts'];
  if(/\.flv$/.test(p))return['flv','direct'];
  if(/\.(mp4|m4v|webm|ogv|ogg|mov|mkv|avi|wmv|mpg|mp3|aac|m4a)$/.test(p))return['direct'];
@@ -334,18 +335,18 @@ function playUrl(url,name,vod){
  tryMode(url,modes,0);
 }
 async function diagnose(orig){
- const ac=new AbortController();
  try{
-  const r=await fetch(px(orig),{signal:ac.signal});
-  const ct=r.headers.get('content-type')||'';
-  let t='';
-  if(r.status>=400||/text|json/i.test(ct))t=(await r.text()).replace(/\s+/g,' ').slice(0,140);
-  ac.abort();
-  if(r.status===502)return 'Our server could not reach the provider: '+(t||'no details')+'. The provider may be offline or may block this server.';
-  if(r.status===401||r.status===403)return 'The provider refused the connection (HTTP '+r.status+'). Common causes: the account is expired, another device is using its only connection, or the provider blocks data-center servers like this host.';
-  if(r.status===404)return 'The provider says this channel was not found (HTTP 404). Try the other stream format (HLS/TS) or another channel.';
-  if(r.status>=400)return 'The provider answered HTTP '+r.status+(t?' ('+t+')':'')+'. The channel may be offline or the account blocked.';
-  return 'The stream connected, but the browser could not play it'+(lastErr?' ('+lastErr+')':'')+'. It probably uses a video or audio format browsers cannot decode (such as H.265/HEVC or AC3). Try another channel or the other stream format.';
+  const r=await fetch('/diag?u='+encodeURIComponent(orig));
+  const t=await r.text();
+  if(r.status===429)return 'Too many requests. Wait a moment and try again.';
+  if(!r.ok)return 'Our server could not reach the provider: '+t.replace(/^Proxy error:\s*/,'').slice(0,160)+'. The provider may be offline, or may block this server.';
+  const d=JSON.parse(t),tech=' [HTTP '+d.status+' · '+(d.type||'no type')+' · '+d.kind+' · '+d.host+']';
+  if(d.status===401||d.status===403)return 'The provider refused the connection. Common causes: expired account, another device already using its only connection, or the provider blocking data-center servers like this host.'+tech;
+  if(d.status===404)return 'The provider says this channel was not found. Try another channel or the other stream format.'+tech;
+  if(d.status>=400)return 'The provider answered with an error. The channel may be offline or the account blocked.'+tech+(d.snippet?' '+d.snippet.replace(/\s+/g,' ').slice(0,100):'');
+  if(d.kind==='HTML/XML page')return 'The provider sent a web page instead of video, which usually means a login problem, a connection limit, or an IP block.'+tech+' '+d.snippet.replace(/\s+/g,' ').slice(0,100);
+  if(d.kind==='empty')return 'The provider accepted the connection but sent no video. The channel may be offline.'+tech;
+  return 'The provider is sending valid data, but the browser could not play it'+(lastErr?' ('+lastErr+')':'')+'. It most likely uses a video or audio format browsers cannot decode (such as H.265/HEVC or AC3).'+tech;
  }catch(e){return 'Could not check the stream: '+e.message}
 }
 function tryMode(orig,modes,k){
@@ -364,11 +365,12 @@ function tryMode(orig,modes,k){
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
  v.onplaying=()=>{status('');if(sess)sess.started=true;$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>status('Buffering…');
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
- if(m==='hls'){
+ if(m==='hls'||m==='hlsalt'){
+  const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
   if(window.Hls&&Hls.isSupported()){
    hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:30,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:5,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
    const h=hls;
-   hls.loadSource(url);hls.attachMedia(v);
+   hls.loadSource(hurl);hls.attachMedia(v);
    hls.on(Hls.Events.MANIFEST_PARSED,go);
    hls.on(Hls.Events.ERROR,(ev,d)=>{
     if(!d.fatal)return;lastErr=d.details||'';
@@ -381,9 +383,10 @@ function tryMode(orig,modes,k){
   }else next();
  }else if(m==='native'){
   if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.onerror=bad;go()}else next();
- }else if(m==='ts'||m==='flv'){
+ }else if(m==='ts'||m==='flv'||m==='tsalt'){
+  const turl=m==='tsalt'?px(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):url;
   if(window.mpegts&&mpegts.isSupported()){
-   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:url},{enableWorker:true,enableStashBuffer:true,stashInitialSize:1048576,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
+   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:1048576,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
    mp.on(mpegts.Events.ERROR,(t,d)=>{lastErr=d||t||'';bad()});
    go();
