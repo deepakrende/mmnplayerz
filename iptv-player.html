@@ -201,7 +201,7 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 const $=id=>document.getElementById(id);
 const px=u=>window.IPTV_PROXY?'/proxy?u='+encodeURIComponent(u):u;
 const v=$('v'),st=$('status'),list=$('list');
-let acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
+let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('iptv_favs')||'[]'))}catch(e){}
 
 function status(msg,kind){st.style.display=msg?'block':'none';st.textContent=msg||'';st.className=/…$/.test(msg||'')?'busy':'';st.style.color=kind==='err'?'var(--err)':''}
@@ -333,12 +333,28 @@ function playUrl(url,name,vod){
  sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
  tryMode(url,modes,0);
 }
+async function diagnose(orig){
+ const ac=new AbortController();
+ try{
+  const r=await fetch(px(orig),{signal:ac.signal});
+  const ct=r.headers.get('content-type')||'';
+  let t='';
+  if(r.status>=400||/text|json/i.test(ct))t=(await r.text()).replace(/\s+/g,' ').slice(0,140);
+  ac.abort();
+  if(r.status===502)return 'Our server could not reach the provider: '+(t||'no details')+'. The provider may be offline or may block this server.';
+  if(r.status===401||r.status===403)return 'The provider refused the connection (HTTP '+r.status+'). Common causes: the account is expired, another device is using its only connection, or the provider blocks data-center servers like this host.';
+  if(r.status===404)return 'The provider says this channel was not found (HTTP 404). Try the other stream format (HLS/TS) or another channel.';
+  if(r.status>=400)return 'The provider answered HTTP '+r.status+(t?' ('+t+')':'')+'. The channel may be offline or the account blocked.';
+  return 'The stream connected, but the browser could not play it'+(lastErr?' ('+lastErr+')':'')+'. It probably uses a video or audio format browsers cannot decode (such as H.265/HEVC or AC3). Try another channel or the other stream format.';
+ }catch(e){return 'Could not check the stream: '+e.message}
+}
 function tryMode(orig,modes,k){
  const url=px(orig);
  teardown();
  if(k>=modes.length){
-  const mixed=location.protocol==='https:'&&orig.startsWith('http:');
-  status(mixed?'Blocked: this page is HTTPS but the stream is HTTP. Open the file locally or host it on plain HTTP.':'Could not play this stream. It may be offline, geo-blocked, use an unsupported codec, or block browser access (CORS).','err');
+  if(window.IPTV_PROXY){status('Checking why this stream failed…');diagnose(orig).then(m=>{if(sess&&sess.orig===orig)status(m,'err')});}
+  else{const mixed=location.protocol==='https:'&&orig.startsWith('http:');
+  status(mixed?'Blocked: this page is HTTPS but the stream is HTTP. Run the proxy server (see setup notes).':'Could not play this stream. It may be offline, geo-blocked, use an unsupported codec, or block browser access (CORS).','err');}
   return;
  }
  const m=modes[k],next=()=>tryMode(orig,modes,k+1);
@@ -355,7 +371,7 @@ function tryMode(orig,modes,k){
    hls.loadSource(url);hls.attachMedia(v);
    hls.on(Hls.Events.MANIFEST_PARSED,go);
    hls.on(Hls.Events.ERROR,(ev,d)=>{
-    if(!d.fatal)return;
+    if(!d.fatal)return;lastErr=d.details||'';
     if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&h._retry<4){h._retry++;setTimeout(()=>{if(hls===h)h.startLoad()},1000*h._retry);return}
     if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&h._media<3){h._media++;h.recoverMediaError();return}
     bad();
@@ -369,7 +385,7 @@ function tryMode(orig,modes,k){
   if(window.mpegts&&mpegts.isSupported()){
    mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:url},{enableWorker:true,enableStashBuffer:true,stashInitialSize:1048576,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
-   mp.on(mpegts.Events.ERROR,bad);
+   mp.on(mpegts.Events.ERROR,(t,d)=>{lastErr=d||t||'';bad()});
    go();
   }else next();
  }else{
