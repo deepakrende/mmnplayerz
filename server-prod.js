@@ -106,7 +106,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (!authed(req)) { res.writeHead(401, { ...SEC, 'WWW-Authenticate': 'Basic realm="IPTV Player"' }); return res.end('Password required'); }
 
-  if (u.pathname === '/proxy') {
+  if (u.pathname === '/proxy' || u.pathname === '/diag') {
     if (req.method !== 'GET') return fail(res, 405, 'GET only');
     req.socket.setNoDelay(true);
     const site = req.headers['sec-fetch-site'];
@@ -125,6 +125,21 @@ const server = http.createServer(async (req, res) => {
       const hd = { 'User-Agent': UA, Accept: '*/*' };
       if (req.headers.range) hd.Range = req.headers.range;
       const r = await upstream(target, hd, ac.signal);
+      if (u.pathname === '/diag') {
+        const chunks = []; let n = 0;
+        await new Promise(done => {
+          r.on('data', c => { chunks.push(c); n += c.length; if (n >= 512) { r.destroy(); done(); } });
+          r.on('end', done); r.on('close', done); r.on('error', done);
+          setTimeout(done, 8000);
+        });
+        const b = Buffer.concat(chunks), head = b.slice(0, 20).toString('latin1');
+        const kind = b[0] === 0x47 ? 'MPEG-TS video' : head.startsWith('#EXTM3U') ? 'HLS/M3U playlist' : head.startsWith('FLV') ? 'FLV video'
+          : b.slice(4, 8).toString() === 'ftyp' ? 'MP4 video' : /^\s*</.test(head) ? 'HTML/XML page' : b.length ? 'unknown data' : 'empty';
+        const mask = x => x.replace(/(live|movie|series)\/[^\/\s]+\/[^\/\s]+\//g, '$1/***/***/');
+        const snippet = /HTML|M3U|unknown/.test(kind) ? mask(b.toString('utf8', 0, 200)) : '';
+        res.writeHead(200, { ...SEC, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify({ status: r.statusCode, type: r.headers['content-type'] || '', kind, bytes: b.length, host: new URL(r.finalUrl).host, redirected: r.finalUrl !== target, snippet }));
+      }
       const ct = r.headers['content-type'] || '';
       if (/mpegurl/i.test(ct) || /\.m3u8?$/i.test(new URL(r.finalUrl).pathname)) {
         const chunks = []; let size = 0;
