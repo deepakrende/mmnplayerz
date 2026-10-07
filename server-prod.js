@@ -141,13 +141,27 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ status: r.statusCode, type: r.headers['content-type'] || '', kind, bytes: b.length, host: new URL(r.finalUrl).host, redirected: r.finalUrl !== target, snippet }));
       }
       const ct = r.headers['content-type'] || '';
-      if (/mpegurl/i.test(ct) || /\.m3u8?$/i.test(new URL(r.finalUrl).pathname)) {
-        const chunks = []; let size = 0;
-        for await (const c of r) { size += c.length; if (size > MAX_PLAYLIST) { r.destroy(); return fail(res, 502, 'Playlist too large'); } chunks.push(c); }
-        const text = Buffer.concat(chunks).toString('utf8');
-        const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl) : text;
-        res.writeHead(r.statusCode, { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
-        return res.end(body);
+      const looksPlaylist = /mpegurl/i.test(ct) || /\.m3u8?$/i.test(new URL(r.finalUrl).pathname);
+      if (looksPlaylist) {
+        // Peek at the first bytes: a real playlist starts with #EXTM3U. Some Xtream panels answer
+        // ".m3u8" with an endless MPEG-TS stream; buffering that would hang forever ("Connecting...").
+        const it = r[Symbol.asyncIterator]();
+        const first = await it.next();
+        const head = first.done ? Buffer.alloc(0) : first.value;
+        if (/^\uFEFF?\s*#EXTM3U/.test(head.toString('utf8', 0, 32))) {
+          const chunks = [head]; let size = head.length;
+          for (let n = await it.next(); !n.done; n = await it.next()) { size += n.value.length; if (size > MAX_PLAYLIST) { r.destroy(); return fail(res, 502, 'Playlist too large'); } chunks.push(n.value); }
+          const text = Buffer.concat(chunks).toString('utf8');
+          const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl) : text;
+          res.writeHead(r.statusCode, { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
+          return res.end(body);
+        }
+        const o = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
+        for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) o[k] = r.headers[k];
+        res.writeHead(r.statusCode, o);
+        res.write(head);
+        r.on('error', () => res.end()); r.pipe(res);
+        return;
       }
       const out = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
       for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) out[k] = r.headers[k];
