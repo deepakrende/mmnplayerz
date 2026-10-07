@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: iptv-player
+    runtime: docker
+    plan: starter          # "free" works for testing but sleeps after 15 min idle
+    healthCheckPath: /healthz
+    envVars:
+      - key: TRUST_PROXY
+        value: render
+      - key: ACCESS_PASSWORD
+        sync: false        # Render asks you for this value on first deploy

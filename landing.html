@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MMN: your IPTV playlists in any browser</title>
+<meta name="description" content="A web player for your own M3U playlists and Xtream accounts. Works on phone, tablet, laptop and TV.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1020;--bg2:#10162b;--panel:#141b33;--raise:#1d2547;--line:#27305a;--text:#edf0ff;--dim:#9aa4cc;--acc:#8b7bff;--acc2:#bdb3ff;--live:#ff4d6d;
+--fd:"Bricolage Grotesque","Avenir Next","Segoe UI Variable Display",system-ui,sans-serif;--fb:"Hanken Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:5rem}
+body{margin:0;background:var(--bg);color:var(--text);font:400 1.05rem/1.6 var(--fb);padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+a{color:inherit}
+:focus-visible{outline:3px solid var(--acc2);outline-offset:3px;border-radius:6px}
+.wrap{width:min(72rem,100% - 2.5rem);margin-inline:auto}
+header{position:sticky;top:0;z-index:5;background:rgba(11,16,32,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+header .wrap{display:flex;align-items:center;gap:1.5rem;height:4.2rem}
+.brand{display:flex;align-items:center;gap:.6rem;font:700 1.45rem/1 var(--fd);letter-spacing:-.02em;text-decoration:none}
+.mark{width:2rem;height:2rem;border-radius:.65rem;background:var(--acc);display:grid;place-items:center;color:#140e40}
+nav{display:flex;gap:1.5rem;margin-left:auto;color:var(--dim)}
+nav a{text-decoration:none}nav a:hover{color:var(--text)}
+.btn{display:inline-block;text-decoration:none;font-weight:600;padding:.7rem 1.25rem;border-radius:999px;border:1px solid var(--line);background:var(--panel);transition:background .15s}
+.btn:hover{background:var(--raise)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#140e40}
+.btn.pri:hover{background:var(--acc2);border-color:var(--acc2)}
+.hero{display:grid;grid-template-columns:1.05fr 1fr;gap:3.5rem;align-items:center;padding:5rem 0 6rem}
+h1{margin:0 0 1.2rem;font:700 clamp(2.4rem,5.2vw,4.1rem)/1.02 var(--fd);letter-spacing:-.035em}
+.lead{margin:0 0 2rem;color:var(--dim);font-size:1.2rem;max-width:34rem}
+.cta{display:flex;gap:.8rem;flex-wrap:wrap}
+.fine{margin:1.4rem 0 0;color:var(--dim);font-size:.9rem}
+.mock{background:var(--panel);border:1px solid var(--line);border-radius:1.4rem;padding:.8rem;box-shadow:0 30px 60px -30px rgba(0,0,0,.7)}
+.screen{position:relative;aspect-ratio:16/9;border-radius:.9rem;overflow:hidden;background:linear-gradient(90deg,#bdbdc9 0 14.28%,#c4b858 0 28.56%,#4fb5c0 0 42.84%,#58b87a 0 57.12%,#b062c0 0 71.4%,#c05566 0 85.68%,#4b62c9 0)}
+.screen::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,.12) 0 2px,transparent 2px 4px);animation:drift 6s linear infinite}
+.pill{position:absolute;z-index:2;top:.7rem;left:.7rem;background:var(--live);color:#fff;font:700 .75rem/1 var(--fd);padding:.35rem .55rem;border-radius:.4rem}
+.lower{position:absolute;z-index:2;left:.7rem;bottom:.7rem;background:rgba(11,16,32,.88);padding:.45rem .8rem;border-radius:.5rem;font:600 .9rem/1.2 var(--fd)}
+.lower small{display:block;color:var(--dim);font:400 .75rem var(--fb)}
+.rows{list-style:none;margin:.7rem 0 .1rem;padding:0;display:grid;gap:.25rem}
+.rows li{display:grid;grid-template-columns:auto 1fr auto;gap:.7rem;align-items:center;padding:.45rem .55rem;border-radius:.7rem;font-size:.95rem}
+.rows li:first-child{background:var(--raise);box-shadow:inset 0 0 0 1px var(--acc)}
+.rows .lg{width:2.2rem;height:2.2rem;border-radius:.6rem;background:#222b58;color:var(--acc2);display:grid;place-items:center;font:700 .95rem var(--fd)}
+.rows small{display:block;color:var(--dim);line-height:1.2}
+.eq{display:flex;gap:2px;align-items:flex-end;height:.9rem}
+.eq b{width:3px;background:var(--acc2);border-radius:2px;animation:eq 1s ease-in-out infinite}
+.eq b:nth-child(2){animation-delay:.2s}.eq b:nth-child(3){animation-delay:.4s}
+section{padding:5rem 0;border-top:1px solid var(--line)}
+h2{margin:0 0 .8rem;font:700 clamp(1.8rem,3.4vw,2.6rem)/1.08 var(--fd);letter-spacing:-.03em}
+.sub{margin:0 0 3rem;color:var(--dim);max-width:38rem}
+.formats{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1rem}
+.formats span{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:.4rem 1rem;font-weight:500}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:0 4rem}
+.feat div{padding:1.5rem 0;border-top:1px solid var(--line)}
+.feat h3{margin:0 0 .35rem;font:700 1.2rem var(--fd);letter-spacing:-.01em}
+.feat p{margin:0;color:var(--dim)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:2.5rem;list-style:none;margin:0;padding:0;counter-reset:s}
+.steps li{counter-increment:s}
+.steps li::before{content:counter(s);display:grid;place-items:center;width:2.4rem;height:2.4rem;margin-bottom:1rem;border-radius:50%;background:var(--acc);color:#140e40;font:700 1.1rem var(--fd)}
+.steps h3{margin:0 0 .35rem;font:700 1.2rem var(--fd)}
+.steps p{margin:0;color:var(--dim)}
+details{border-top:1px solid var(--line);padding:1.1rem 0}
+details:last-of-type{border-bottom:1px solid var(--line)}
+summary{cursor:pointer;font:600 1.1rem var(--fd);list-style:none;display:flex;justify-content:space-between;gap:1rem}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--acc2);font-size:1.4rem;line-height:1}
+details[open] summary::after{content:"−"}
+details p{margin:.7rem 0 0;color:var(--dim);max-width:44rem}
+.final{text-align:center}
+.final .sub{margin-inline:auto}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--dim);font-size:.9rem}
+@keyframes eq{0%,100%{height:25%}50%{height:100%}}
+@keyframes drift{to{background-position:0 4px}}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}}
+.hero>div:first-child{animation:rise .7s ease both}
+@media(max-width:860px){
+ nav{display:none}header .btn{margin-left:auto}
+ .hero{grid-template-columns:1fr;gap:2.5rem;padding:3rem 0 4rem}
+ .feat{grid-template-columns:1fr}.steps{grid-template-columns:1fr;gap:2rem}
+ section{padding:3.5rem 0}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<header>
+ <div class="wrap">
+  <a class="brand" href="/"><span class="mark"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg></span>MMN</a>
+  <nav aria-label="Main"><a href="#features">Features</a><a href="#how">How it works</a><a href="#faq">FAQ</a></nav>
+  <a class="btn pri" href="/app">Open player</a>
+ </div>
+</header>
+
+<main>
+<div class="wrap hero">
+ <div>
+  <h1>Your own channels, on every screen you own.</h1>
+  <p class="lead">MMN is a web player for your M3U playlists and Xtream accounts. Open it in any browser on your phone, tablet, laptop or TV, and start watching.</p>
+  <div class="cta"><a class="btn pri" href="/app">Open player</a><a class="btn" href="#how">See how it works</a></div>
+  <p class="fine">MMN doesn't provide channels. You bring your own playlist.</p>
+ </div>
+ <div class="mock" aria-hidden="true">
+  <div class="screen"><span class="pill">● Live</span><div class="lower">Channel 07<small>Sports</small></div></div>
+  <ul class="rows">
+   <li><span class="lg">S</span><span>Sports One<small>Sports</small></span><i class="eq"><b></b><b></b><b></b></i></li>
+   <li><span class="lg">N</span><span>News 24<small>News</small></span><span></span></li>
+   <li><span class="lg">M</span><span>Movie Night<small>Movies</small></span><span></span></li>
+  </ul>
+ </div>
+</div>
+
+<section id="features"><div class="wrap">
+ <h2>Plays what your provider sends</h2>
+ <p class="sub">The formats IPTV services actually use, with automatic fallback when one method fails.</p>
+ <div class="formats"><span>HLS (.m3u8)</span><span>MPEG-TS</span><span>M3U playlists</span><span>Xtream Codes</span><span>FLV</span><span>MP4 and WebM</span></div>
+ <div class="feat" style="margin-top:3rem">
+  <div><h3>Xtream or M3U, your choice</h3><p>Sign in with server, username and password, or load a playlist. Live TV, Movies, Series and Sports each get their own section.</p></div>
+  <div><h3>Built to keep playing</h3><p>It reconnects after a drop, recovers from errors and notices when the picture freezes.</p></div>
+  <div><h3>Find channels fast</h3><p>Search, filter by group, and star favorites that stay on your device.</p></div>
+  <div><h3>Made for the couch</h3><p>Arrow keys change channel, F goes fullscreen and P opens picture-in-picture. It works with TV remotes too.</p></div>
+  <div><h3>Every device</h3><p>The same page adapts to phones, tablets, laptops and large TV screens.</p></div>
+  <div><h3>Private by design</h3><p>Playlist links and logins are never logged or stored on our server. "Remember me" saves them only in your own browser.</p></div>
+ </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+ <h2>Watching in three steps</h2>
+ <p class="sub">No installs and no account needed to try it.</p>
+ <ol class="steps">
+  <li><h3>Open the player</h3><p>Go to the player in any modern browser on any device.</p></li>
+  <li><h3>Add your source</h3><p>Connect your Xtream account, or paste or upload your M3U playlist.</p></li>
+  <li><h3>Pick a channel</h3><p>Choose from the list and it starts playing. Use arrows or your remote to switch.</p></li>
+ </ol>
+</div></section>
+
+<section id="faq"><div class="wrap">
+ <h2>Questions</h2>
+ <p class="sub">The short answers.</p>
+ <details><summary>Does MMN include channels?</summary><p>No. MMN is only a player. You load a playlist or account from a provider you are licensed to use, and MMN plays it.</p></details>
+ <details><summary>Which devices work?</summary><p>Any device with a modern browser: iPhone, iPad, Android, Windows, Mac, Linux, and smart TVs with a built-in browser.</p></details>
+ <details><summary>Why won't a channel play?</summary><p>The channel may be offline or blocked in your region, or your provider may allow only one connection at a time. Close other players using the same account, and try switching between HLS and MPEG-TS when you connect.</p></details>
+ <details><summary>Are my logins stored?</summary><p>Not on our server. Streams pass through it to reach your browser, but links and credentials aren't logged. If you tick "Remember on this device", they are saved in your own browser only.</p></details>
+ <details><summary>Is there an app?</summary><p>Not yet. The website works on all devices today, and native apps for TVs and phones are planned.</p></details>
+</div></section>
+
+<section class="final"><div class="wrap">
+ <h2>Ready to watch?</h2>
+ <p class="sub">Open the player and add your source in under a minute.</p>
+ <a class="btn pri" href="/app">Open player</a>
+</div></section>
+</main>
+
+<footer><div class="wrap">© MMN. MMN does not provide, host or sell any channels or content. Use it only with content you are licensed to watch.</div></footer>
+</body>
+</html>
