@@ -199,7 +199,7 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 <script>
 (function(){
 const $=id=>document.getElementById(id);
-const px=u=>window.IPTV_PROXY?'/proxy?u='+encodeURIComponent(u):u;
+const px=u=>window.IPTV_PROXY?location.origin+'/proxy?u='+encodeURIComponent(u):u; /* absolute URL: mpegts.js fetches inside a Worker, which cannot resolve relative URLs */
 const v=$('v'),st=$('status'),list=$('list');
 let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('iptv_favs')||'[]'))}catch(e){}
