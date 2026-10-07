@@ -368,7 +368,7 @@ function tryMode(orig,modes,k){
  if(m==='hls'||m==='hlsalt'){
   const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
   if(window.Hls&&Hls.isSupported()){
-   hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:30,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:5,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
+   hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:30,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:1,manifestLoadingTimeOut:8000,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
    const h=hls;
    hls.loadSource(hurl);hls.attachMedia(v);
    hls.on(Hls.Events.MANIFEST_PARSED,go);
@@ -402,9 +402,10 @@ function reconnect(why){
  const s=sess,k=s.k;s.started=false;
  setTimeout(()=>{if(sess===s)tryMode(s.orig,s.modes,k)},Math.min(1000*s.fails,5000));
 }
-setInterval(()=>{ /* frozen picture watchdog */
- if(!sess||sess.vod||v.paused||v.seeking)return;
+setInterval(()=>{ /* watchdog: never-started streams advance to the next mode; frozen picture reconnects */
+ if(!sess||sess.vod)return;
  if(!sess.started){if(Date.now()-sess.lastTs>12000)tryMode(sess.orig,sess.modes,sess.k+1);return}
+ if(v.paused||v.seeking)return;
  if(Date.now()-sess.lastTs>10000)reconnect('stalled');
 },2000);
 v.addEventListener('ended',()=>{if(!sess)return;if(sess.vod){if(mode==='episodes')step(1)}else reconnect('stream ended')});
