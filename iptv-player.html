@@ -331,7 +331,7 @@ function playIndex(i){
 function playUrl(url,name,vod){
  $('title').textContent=name;$('sub').textContent='Direct stream';$('nlogo').innerHTML='';$('nlogo').dataset.ini='▶';$('live').hidden=true;$('welcome').hidden=true;document.title=name+' · MMN';
  const modes=guess(url);
- sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
+ lastErr='';sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
  tryMode(url,modes,0);
 }
 async function diagnose(orig){
@@ -373,7 +373,7 @@ function tryMode(orig,modes,k){
    hls.loadSource(hurl);hls.attachMedia(v);
    hls.on(Hls.Events.MANIFEST_PARSED,go);
    hls.on(Hls.Events.ERROR,(ev,d)=>{
-    if(!d.fatal)return;lastErr=d.details||'';
+    if(!d.fatal)return;console.warn('[hls]',d.details);lastErr=(lastErr?lastErr+' | ':'')+'hls '+(d.details||'');
     if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&h._retry<4){h._retry++;setTimeout(()=>{if(hls===h)h.startLoad()},1000*h._retry);return}
     if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&h._media<3){h._media++;h.recoverMediaError();return}
     bad();
@@ -388,7 +388,7 @@ function tryMode(orig,modes,k){
   if(window.mpegts&&mpegts.isSupported()){
    mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
-   mp.on(mpegts.Events.ERROR,(t,d)=>{lastErr=d||t||'';bad()});
+   mp.on(mpegts.Events.ERROR,(t,d,i)=>{const e='ts '+t+'/'+d+(i&&i.msg?' - '+i.msg:'');console.warn('[mpegts]',t,d,i);lastErr=(lastErr?lastErr+' | ':'')+e;bad()});
    go();
   }else next();
  }else{
