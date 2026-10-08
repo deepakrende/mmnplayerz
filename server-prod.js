@@ -59,7 +59,8 @@ function upstream(target, headers, signal, hops = 0) {
     });
     req.on('timeout', () => req.destroy(new Error('Upstream timeout')));
     req.on('error', reject);
-    signal.addEventListener('abort', () => req.destroy());
+    if (signal.aborted) req.destroy();
+    else { const onAbort = () => req.destroy(); signal.addEventListener('abort', onAbort, { once: true }); req.on('close', () => signal.removeEventListener('abort', onAbort)); }
     req.end();
   });
 }
@@ -73,7 +74,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function pumpLive(res, first, target, hd, signal) {
   const host = (() => { try { return new URL(target).host; } catch { return '?'; } })();
   const headers = { ...hd }; delete headers.Range;
-  let r = first, quick = 0, reconnects = 0;
+  let r = first, quick = 0, reconnects = 0, lastUrl = first.finalUrl, cachedOk = true, usedCached = false, lastMs = 0;
   for (;;) {
     const t0 = Date.now(); let got = 0, carry = Buffer.alloc(0), why = 'end';
     await new Promise(resolve => {
@@ -90,15 +91,23 @@ async function pumpLive(res, first, target, hd, signal) {
     });
     if (signal.aborted || res.destroyed) return;
     const secs = Math.round((Date.now() - t0) / 100) / 10;
-    console.log('[live] provider ended stream host=' + host + ' after ' + secs + 's, ' + got + ' bytes (' + why + '); reconnecting #' + (reconnects + 1));
-    if (got < 188 * 20 || secs < 3) quick++; else quick = 0;
-    if (quick >= 4 || ++reconnects > 500) break;
-    await sleep(quick ? 400 * quick : 100);
+    console.log('[live] provider ended stream host=' + host + ' after ' + secs + 's, ' + got + ' bytes (' + why + '); last reconnect took ' + lastMs + 'ms; reconnect #' + (reconnects + 1));
+    if (got < 188 * 20 || secs < 3) { quick++; if (usedCached) cachedOk = false; } else quick = 0;
+    if (quick >= 4 || ++reconnects > 2000) break;
+    if (quick) await sleep(400 * quick);
     if (signal.aborted || res.destroyed) return;
+    const tc = Date.now();
     try {
-      r = await upstream(target, headers, signal);
+      usedCached = false;
+      if (cachedOk && lastUrl) {
+        try { r = await upstream(lastUrl, headers, signal); usedCached = true; if (r.statusCode !== 200) { r.resume(); usedCached = false; cachedOk = false; r = null; } }
+        catch { cachedOk = false; r = null; }
+      } else r = null;
+      if (!r) r = await upstream(target, headers, signal);
       if (r.statusCode !== 200) { r.resume(); quick++; if (quick >= 4) break; r = emptyStream(); }
+      else lastUrl = r.finalUrl;
     } catch (e) { quick++; if (quick >= 4) break; r = emptyStream(); }
+    lastMs = Date.now() - tc;
   }
   res.end();
 }
