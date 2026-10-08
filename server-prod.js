@@ -71,7 +71,23 @@ function upstream(target, headers, signal, hops = 0) {
    response to the browser, cutting only on whole 188-byte TS packets so the stream stays valid. */
 const LIVE_TS = /\/live\/[^/]+\/[^/]+\/\d+\.ts$/i;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function pumpLive(res, first, target, hd, signal) {
+async function pumpLive(res, first, target, hd, signal, tx) {
+  /* tx=true: pass the stream through ffmpeg, copying video and converting audio (AC-3/E-AC-3/MP2...) to AAC,
+     because browsers cannot decode Dolby audio. Used only when the player asks for it. */
+  let out = res, ff = null;
+  if (tx) {
+    const { spawn } = require('child_process');
+    ff = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-fflags', '+genpts+discardcorrupt', '-probesize', '1000000', '-analyzeduration', '1500000',
+      '-i', 'pipe:0', '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
+      '-f', 'mpegts', '-muxdelay', '0', '-flush_packets', '1', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    out = ff.stdin;
+    ff.stdin.on('error', () => {});
+    ff.stderr.on('data', d => console.log('[ffmpeg] ' + String(d).trim().slice(0, 200)));
+    ff.stdout.on('data', c => { if (!res.write(c)) { ff.stdout.pause(); res.once('drain', () => ff.stdout.resume()); } });
+    ff.on('error', e => { console.log('[ffmpeg] cannot start: ' + e.message); res.end(); });
+    ff.on('close', () => { if (!res.writableEnded) res.end(); });
+    res.on('close', () => { try { ff.kill('SIGKILL'); } catch {} });
+  }
   const host = (() => { try { return new URL(target).host; } catch { return '?'; } })();
   const headers = { ...hd }; delete headers.Range;
   let r = first, quick = 0, reconnects = 0, lastUrl = first.finalUrl, cachedOk = true, usedCached = false, lastMs = 0;
@@ -83,7 +99,7 @@ async function pumpLive(res, first, target, hd, signal) {
         const buf = carry.length ? Buffer.concat([carry, c]) : c;
         const n = buf.length - (buf.length % 188);
         carry = buf.subarray(n);
-        if (n && !res.write(buf.subarray(0, n))) { r.pause(); res.once('drain', () => r.resume()); }
+        if (n && !out.write(buf.subarray(0, n))) { r.pause(); out.once('drain', () => r.resume()); }
       });
       r.on('end', resolve);
       r.on('error', e => { why = 'error: ' + e.message; resolve(); });
@@ -109,7 +125,7 @@ async function pumpLive(res, first, target, hd, signal) {
     } catch (e) { quick++; if (quick >= 4) break; r = emptyStream(); }
     lastMs = Date.now() - tc;
   }
-  res.end();
+  if (ff) ff.stdin.end(); else res.end();
 }
 function emptyStream() { const { Readable } = require('stream'); const s = new Readable({ read() {} }); s.push(null); return s; }
 
@@ -217,7 +233,8 @@ const server = http.createServer(async (req, res) => {
       for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) out[k] = r.headers[k];
       res.writeHead(r.statusCode, out);
       let tp = ''; try { tp = new URL(target).pathname; } catch {}
-      if (r.statusCode === 200 && !r.headers['content-length'] && LIVE_TS.test(tp)) { pumpLive(res, r, target, hd, ac.signal); return; }
+      const wantTx = u.searchParams.get('tx') === '1';
+      if (r.statusCode === 200 && !r.headers['content-length'] && (LIVE_TS.test(tp) || wantTx)) { pumpLive(res, r, target, hd, ac.signal, wantTx); return; }
       r.on('error', () => res.end()); r.pipe(res);
     } catch (e) { fail(res, 502, 'Proxy error: ' + e.message); }
     return;
