@@ -63,6 +63,47 @@ function upstream(target, headers, signal, hops = 0) {
     req.end();
   });
 }
+
+/* ---- live MPEG-TS keep-alive ----
+   Some Xtream panels close a live .ts connection every ~30s. Instead of letting the browser see the
+   break (and freeze while it reconnects), reconnect to the provider here and keep feeding the SAME
+   response to the browser, cutting only on whole 188-byte TS packets so the stream stays valid. */
+const LIVE_TS = /\/live\/[^/]+\/[^/]+\/\d+\.ts$/i;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function pumpLive(res, first, target, hd, signal) {
+  const host = (() => { try { return new URL(target).host; } catch { return '?'; } })();
+  const headers = { ...hd }; delete headers.Range;
+  let r = first, quick = 0, reconnects = 0;
+  for (;;) {
+    const t0 = Date.now(); let got = 0, carry = Buffer.alloc(0), why = 'end';
+    await new Promise(resolve => {
+      r.on('data', c => {
+        got += c.length;
+        const buf = carry.length ? Buffer.concat([carry, c]) : c;
+        const n = buf.length - (buf.length % 188);
+        carry = buf.subarray(n);
+        if (n && !res.write(buf.subarray(0, n))) { r.pause(); res.once('drain', () => r.resume()); }
+      });
+      r.on('end', resolve);
+      r.on('error', e => { why = 'error: ' + e.message; resolve(); });
+      r.on('close', () => { if (why === 'end') why = 'close'; resolve(); });
+    });
+    if (signal.aborted || res.destroyed) return;
+    const secs = Math.round((Date.now() - t0) / 100) / 10;
+    console.log('[live] provider ended stream host=' + host + ' after ' + secs + 's, ' + got + ' bytes (' + why + '); reconnecting #' + (reconnects + 1));
+    if (got < 188 * 20 || secs < 3) quick++; else quick = 0;
+    if (quick >= 4 || ++reconnects > 500) break;
+    await sleep(quick ? 400 * quick : 100);
+    if (signal.aborted || res.destroyed) return;
+    try {
+      r = await upstream(target, headers, signal);
+      if (r.statusCode !== 200) { r.resume(); quick++; if (quick >= 4) break; r = emptyStream(); }
+    } catch (e) { quick++; if (quick >= 4) break; r = emptyStream(); }
+  }
+  res.end();
+}
+function emptyStream() { const { Readable } = require('stream'); const s = new Readable({ read() {} }); s.push(null); return s; }
+
 function rewrite(text, base) {
   return text.split(/\r?\n/).map(l => {
     const t = l.trim();
@@ -166,6 +207,8 @@ const server = http.createServer(async (req, res) => {
       const out = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
       for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) out[k] = r.headers[k];
       res.writeHead(r.statusCode, out);
+      let tp = ''; try { tp = new URL(target).pathname; } catch {}
+      if (r.statusCode === 200 && !r.headers['content-length'] && LIVE_TS.test(tp)) { pumpLive(res, r, target, hd, ac.signal); return; }
       r.on('error', () => res.end()); r.pipe(res);
     } catch (e) { fail(res, 502, 'Proxy error: ' + e.message); }
     return;
