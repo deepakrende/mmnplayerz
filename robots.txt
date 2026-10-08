@@ -1,6 +1,0 @@
-User-agent: *
-Allow: /
-Disallow: /app
-Disallow: /login
-Disallow: /proxy
-Disallow: /diag
