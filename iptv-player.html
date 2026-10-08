@@ -201,7 +201,7 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 const $=id=>document.getElementById(id);
 const px=u=>window.IPTV_PROXY?location.origin+'/proxy?u='+encodeURIComponent(u):u; /* absolute URL: mpegts.js fetches inside a Worker, which cannot resolve relative URLs */
 const v=$('v'),st=$('status'),list=$('list');
-let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
+let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,cush=0,limit=300,favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('iptv_favs')||'[]'))}catch(e){}
 
 function status(msg,kind){st.style.display=msg?'block':'none';st.textContent=msg||'';st.className=/…$/.test(msg||'')?'busy':'';st.style.color=kind==='err'?'var(--err)':''}
@@ -331,7 +331,7 @@ function playIndex(i){
 function playUrl(url,name,vod){
  $('title').textContent=name;$('sub').textContent='Direct stream';$('nlogo').innerHTML='';$('nlogo').dataset.ini='▶';$('live').hidden=true;$('welcome').hidden=true;document.title=name+' · MMN';
  const modes=guess(url);
- lastErr='';sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
+ lastErr='';clearInterval(cush);cush=0;sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
  tryMode(url,modes,0);
 }
 async function diagnose(orig){
@@ -363,7 +363,12 @@ function tryMode(orig,modes,k){
  if(sess){sess.k=k;sess.lastTs=Date.now()}
  status('Connecting…');
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
- v.onplaying=()=>{status('');if(sess)sess.started=true;$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>status('Buffering…');
+ function cushion(){ /* live TS: wait until ~6s is buffered so short network hiccups are not visible */
+ if(cush||!mp||!sess||sess.vod)return;
+ const t0=Date.now();v.pause();status('Buffering…');
+ cush=setInterval(()=>{let ahead=0;try{const b=v.buffered;if(b.length)ahead=b.end(b.length-1)-v.currentTime}catch(e){}
+  if(ahead>=6||Date.now()-t0>20000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},300)}
+v.onplaying=()=>{status('');if(sess)sess.started=true;if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion()}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion()};
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
  if(m==='hls'||m==='hlsalt'){
   const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
