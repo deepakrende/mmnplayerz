@@ -161,6 +161,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
     <button class="ib" id="next" title="Next channel (↓)" aria-label="Next channel"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 4 10 8-10 8zM19 4v16"/></svg></button>
     <button class="ib" id="pip" title="Picture in picture (P)" aria-label="Picture in picture"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="6" height="4" rx="1"/></svg></button>
     <button class="ib" id="fs" title="Fullscreen (F)" aria-label="Fullscreen"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button class="ib" id="vlc" title="Copy a link to open this channel in VLC" aria-label="Copy VLC link"><span style="font-weight:700;font-size:.8rem;letter-spacing:.3px">VLC</span></button>
    </div>
   </div>
  </section>
@@ -428,6 +429,12 @@ function reconnect(why){
  const s=sess,k=s.k;s.started=false;
  setTimeout(()=>{if(sess===s)tryMode(s.orig,s.modes,k)},Math.min(1000*s.fails,5000));
 }
+$('vlc').onclick=async()=>{
+ if(!sess){status('Play a channel first');setTimeout(()=>status(''),2500);return}
+ let u=sess.orig;if(!sess.vod)u=u.replace(/\.m3u8(\?.*)?$/i,'.ts');
+ try{await navigator.clipboard.writeText(u);status('VLC link copied. In VLC press Ctrl+N, paste, Play');setTimeout(()=>{if(v.paused===false||sess)status('')},4500)}
+ catch(e){prompt('Copy this link. In VLC press Ctrl+N, paste it and click Play:',u)}
+};
 setInterval(()=>{ /* watchdog: never-started streams advance to the next mode; frozen picture reconnects */
  if(!sess||sess.vod)return;
  if(!sess.started){const mm=sess.modes[sess.k]||'';if(Date.now()-sess.lastTs>(/^(ts|tsalt|flv|tstx)$/.test(mm)?30000:12000))tryMode(sess.orig,sess.modes,sess.k+1);return}
