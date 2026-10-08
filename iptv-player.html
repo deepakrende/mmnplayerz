@@ -366,12 +366,21 @@ function tryMode(orig,modes,k){
  if(sess){sess.k=k;sess.lastTs=Date.now()}
  status('Connecting…');
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
- function cushion(){ /* live TS: wait until ~12s is buffered so short network hiccups are not visible */
+ function aheadOf(){const t=v.currentTime;try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)<=t+0.15&&b.end(i)>=t)return b.end(i)-t}catch(e){}return 0}
+function cushion(tgt){ /* live TS: wait until a few seconds are buffered so short hiccups are not visible */
  if(cush||!mp||!sess||sess.vod)return;
  const t0=Date.now();v.pause();status('Buffering…');
- cush=setInterval(()=>{let ahead=0;try{const b=v.buffered;if(b.length)ahead=b.end(b.length-1)-v.currentTime}catch(e){}
-  if(ahead>=12||Date.now()-t0>30000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},300)}
-v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion()}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{dlog('waiting for data');status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion()};
+ cush=setInterval(()=>{
+  if(aheadOf()>=tgt||Date.now()-t0>10000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},250)}
+/* some providers restart the stream with a tiny hole in the timeline; the browser then sits at the hole. Jump over it. */
+let gapStuck=0,gapLastT=-1;
+setInterval(()=>{
+ if(!mp||!sess||sess.vod||v.paused||v.seeking||cush){gapStuck=0;return}
+ const t=v.currentTime;
+ if(Math.abs(t-gapLastT)<0.01)gapStuck+=250;else{gapStuck=0;gapLastT=t}
+ if(gapStuck>=600){try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)>t&&b.start(i)-t<5){dlog('skipped a '+(b.start(i)-t).toFixed(2)+'s gap');v.currentTime=b.start(i)+0.05;gapStuck=0;break}}catch(e){}}
+},250);
+v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion(8)}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{dlog('waiting for data');status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion(4)};
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
  if(m==='hls'||m==='hlsalt'){
   const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
