@@ -204,7 +204,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
 const $=id=>document.getElementById(id);
 const px=u=>window.IPTV_PROXY?location.origin+'/proxy?u='+encodeURIComponent(u):u; /* absolute URL: mpegts.js fetches inside a Worker, which cannot resolve relative URLs */
 const v=$('v'),st=$('status'),list=$('list');
-let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,cush=0,limit=300,favs=new Set();
+let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,cush=0,TX=new Set(),limit=300,favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('iptv_favs')||'[]'))}catch(e){}
 
 function status(msg,kind){st.style.display=msg?'block':'none';st.textContent=msg||'';st.className=/…$/.test(msg||'')?'busy':'';st.style.color=kind==='err'?'var(--err)':''}
@@ -333,7 +333,7 @@ function playIndex(i){
 }
 function playUrl(url,name,vod){
  $('title').textContent=name;$('sub').textContent='Direct stream';$('nlogo').innerHTML='';$('nlogo').dataset.ini='▶';$('live').hidden=true;$('welcome').hidden=true;document.title=name+' · MMN';
- const modes=guess(url);
+ const modes=guess(url);if(TX.has(url)&&!modes.includes('tstx'))modes.unshift('tstx');
  lastErr='';clearInterval(cush);cush=0;v.classList.remove('islive');sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
  tryMode(url,modes,0);
 }
@@ -391,13 +391,15 @@ v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive
   }else next();
  }else if(m==='native'){
   if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.onerror=bad;go()}else next();
- }else if(m==='ts'||m==='flv'||m==='tsalt'){
-  const turl=m==='tsalt'?px(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):url;
+ }else if(m==='ts'||m==='flv'||m==='tsalt'||m==='tstx'){
+  const turl=m==='tsalt'?px(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):m==='tstx'?px(/\.m3u8(\?.*)?$/i.test(orig)?orig.replace(/\.m3u8(\?.*)?$/i,'.ts'):orig)+'&tx=1':url;
   if(window.mpegts&&mpegts.isSupported()){
    mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
    {const E=mpegts.Events;mp.on(E.STATISTICS_INFO,s=>{dspeed=Math.round(s.speed||0)});E.LOADING_COMPLETE&&mp.on(E.LOADING_COMPLETE,()=>dlog('server closed the stream'));E.RECOVERED_EARLY_EOF&&mp.on(E.RECOVERED_EARLY_EOF,()=>dlog('connection dropped, recovered'))}
-   mp.on(mpegts.Events.ERROR,(t,d,i)=>{const e='ts '+t+'/'+d+(i&&i.msg?' - '+i.msg:'');console.warn('[mpegts]',t,d,i);lastErr=(lastErr?lastErr+' | ':'')+e;bad()});
+   mp.on(mpegts.Events.ERROR,(t,d,i)=>{const e='ts '+t+'/'+d+(i&&i.msg?' - '+i.msg:'');console.warn('[mpegts]',t,d,i);lastErr=(lastErr?lastErr+' | ':'')+e;
+    if(m!=='tstx'&&window.IPTV_PROXY&&/ac-3|ec-3|addSourceBuffer|codecs=/i.test(e)&&sess&&!modes.includes('tstx')){TX.add(orig);modes.splice(k+1,0,'tstx');dlog('audio not supported by browser - converting on server')}
+    bad()});
    go();
   }else next();
  }else{
@@ -419,7 +421,7 @@ function reconnect(why){
 }
 setInterval(()=>{ /* watchdog: never-started streams advance to the next mode; frozen picture reconnects */
  if(!sess||sess.vod)return;
- if(!sess.started){const mm=sess.modes[sess.k]||'';if(Date.now()-sess.lastTs>(/^(ts|tsalt|flv)$/.test(mm)?30000:12000))tryMode(sess.orig,sess.modes,sess.k+1);return}
+ if(!sess.started){const mm=sess.modes[sess.k]||'';if(Date.now()-sess.lastTs>(/^(ts|tsalt|flv|tstx)$/.test(mm)?30000:12000))tryMode(sess.orig,sess.modes,sess.k+1);return}
  if(v.paused||v.seeking)return;
  if(Date.now()-sess.lastTs>10000)reconnect('stalled');
 },2000);
