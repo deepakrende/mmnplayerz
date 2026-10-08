@@ -3,6 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MMN">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>MMN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -103,12 +111,22 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 .poster .fav{position:absolute;z-index:1;top:.25rem;right:.25rem;background:rgba(11,16,32,.75);padding:.15rem .4rem;font-size:1rem}
 .card:hover .poster,.card:focus-visible .poster,.card.on .poster{box-shadow:0 0 0 2px var(--acc)}
 .card .n{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:.88rem}
+#menu{display:none}
+#errbar{position:absolute;z-index:4;top:0;left:0;right:0;display:flex;gap:.8rem 1rem;align-items:center;justify-content:space-between;flex-wrap:wrap;background:rgba(24,10,28,.96);border-bottom:1px solid #5a2a43;padding:.8rem 1rem}
+.et{flex:1 1 16rem;min-width:0}
+#errtxt{margin:0;color:#ffb3bf;font-weight:500}
+#errbar small{display:block;margin-top:.3rem;color:var(--dim);word-break:break-word}
+.eb{display:flex;gap:.5rem;align-items:center}
+.eb .ib{width:2.4rem;height:2.4rem}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}}
 @keyframes eq{0%,100%{height:25%}50%{height:100%}}
 @media(max-width:900px){
  .top{flex-wrap:wrap;gap:.6rem;padding:.6rem .8rem}
- .src{order:3;flex-basis:100%;max-width:none}.tools{margin-left:auto}
+ .brand{order:1}.tools{order:2;margin-left:auto}#menu{display:grid;order:3}
+ .src{display:none;order:4;flex-basis:100%;max-width:none}.tools .opt{display:none}
+ .top.open .src{display:flex}.top.open .tools{order:5;flex-basis:100%;margin-left:0;justify-content:flex-end}
+ .top.open .tools .opt{display:grid}.top.open #menu{margin-left:auto}
  main{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:.75rem;padding:.75rem}
  #vwrap,.now{width:100%}#vwrap{border-radius:1rem}
  #nlogo{width:2.6rem;height:2.6rem}.meta h2{font-size:1.15rem}
@@ -118,17 +136,19 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 </style>
 </head>
 <body>
-<header class="top">
+<header class="top" id="top">
  <a class="brand" href="/" aria-label="MMN home"><span class="mark"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg></span>MMN</a>
  <div class="src">
   <input id="url" type="url" placeholder="Paste a playlist or stream link" aria-label="Playlist or stream URL">
   <button class="pri" id="go">Load</button>
  </div>
  <div class="tools">
-  <button class="ib" id="file" title="Open playlist file" aria-label="Open playlist file"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
-  <button class="ib" id="paste" title="Paste M3U text" aria-label="Paste M3U text"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/></svg></button>
+  <button class="ib opt" id="file" title="Open playlist file" aria-label="Open playlist file"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+  <button class="ib opt" id="paste" title="Paste M3U text" aria-label="Paste M3U text"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/></svg></button>
+  <button class="ib opt" id="signout" hidden title="Sign out" aria-label="Sign out"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
   <button id="xt">Xtream login</button>
  </div>
+ <button class="ib" id="menu" aria-label="More options" aria-expanded="false"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
  <input id="fi" type="file" accept=".m3u,.m3u8,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl" hidden>
 </header>
 <main>
@@ -149,6 +169,10 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
     </div>
    </div>
    <div id="status" role="status"></div>
+   <div id="errbar" role="alert" hidden>
+    <div class="et"><p id="errtxt"></p><small id="errdet"></small></div>
+    <div class="eb"><button class="pri" id="retry">Retry</button><button id="altfmt" hidden>Try other format</button><button class="ib" id="errx" aria-label="Dismiss">✕</button></div>
+   </div>
   </div>
   <div class="now">
    <span class="lg" id="nlogo" data-ini="▶"></span>
@@ -201,10 +225,22 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 const $=id=>document.getElementById(id);
 const px=u=>window.IPTV_PROXY?location.origin+'/proxy?u='+encodeURIComponent(u):u; /* absolute URL: mpegts.js fetches inside a Worker, which cannot resolve relative URLs */
 const v=$('v'),st=$('status'),list=$('list');
-let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
+let lastErr='',lastPlay=null,acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,limit=300,favs=new Set();
 try{favs=new Set(JSON.parse(localStorage.getItem('iptv_favs')||'[]'))}catch(e){}
 
-function status(msg,kind){st.style.display=msg?'block':'none';st.textContent=msg||'';st.className=/…$/.test(msg||'')?'busy':'';st.style.color=kind==='err'?'var(--err)':''}
+const XL=/\/live\/[^/]+\/[^/]+\/\d+\.(m3u8|ts)$/i;
+function hideErr(){$('errbar').hidden=true}
+function showErr(msg){
+ const i=msg.lastIndexOf(' ['),det=i>0&&msg.endsWith(']')?msg.slice(i+2,-1):'';
+ $('errtxt').textContent=det?msg.slice(0,i):msg;$('errdet').textContent=det;$('errdet').hidden=!det;
+ $('altfmt').hidden=!(lastPlay&&XL.test(lastPlay.url.split('?')[0]));
+ $('errbar').hidden=false;
+}
+function status(msg,kind){
+ if(kind==='err'&&msg){st.style.display='none';showErr(msg);return}
+ hideErr();
+ st.style.display=msg?'block':'none';st.textContent=msg||'';st.className=/…$/.test(msg||'')?'busy':'';st.style.color=''
+}
 function saveFavs(){try{localStorage.setItem('iptv_favs',JSON.stringify([...favs]))}catch(e){}}
 
 /* ---------- M3U parsing ---------- */
@@ -228,6 +264,7 @@ function parseM3U(text){
 
 /* ---------- Loading ---------- */
 function setChannels(arr,tab){
+ $('top').classList.remove('open');$('menu').setAttribute('aria-expanded','false');
  channels=arr;cur=-1;limit=300;curTab=tab||curTab;
  gridMode=arr.length>0&&(arr[0].kind==='series'||(curTab==='movies'&&arr[0].kind==='vod'));
  if(!arr.length)$('empty').textContent='Nothing here yet in this section.';
@@ -330,10 +367,23 @@ function playIndex(i){
 }
 function playUrl(url,name,vod){
  $('title').textContent=name;$('sub').textContent='Direct stream';$('nlogo').innerHTML='';$('nlogo').dataset.ini='▶';$('live').hidden=true;$('welcome').hidden=true;document.title=name+' · MMN';
+ lastPlay={url,vod:!!vod};startSess(url,!!vod);
+}
+function startSess(url,vod){
  const modes=guess(url);
  lastErr='';sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod};
  tryMode(url,modes,0);
 }
+$('errx').onclick=hideErr;
+$('menu').onclick=()=>{const t=$('top');t.classList.toggle('open');$('menu').setAttribute('aria-expanded',t.classList.contains('open'))};
+if(window.IPTV_AUTH)$('signout').hidden=false;
+$('signout').onclick=()=>{location.href='/logout'};
+$('retry').onclick=()=>{if(lastPlay)startSess(lastPlay.url,lastPlay.vod)};
+$('altfmt').onclick=()=>{
+ if(!lastPlay)return;const u=lastPlay.url;
+ const alt=/\.m3u8(\?.*)?$/i.test(u)?u.replace(/\.m3u8(\?.*)?$/i,'.ts'):u.replace(/\.ts(\?.*)?$/i,'.m3u8');
+ lastPlay={url:alt,vod:lastPlay.vod};startSess(alt,lastPlay.vod);
+};
 async function diagnose(orig){
  try{
   const r=await fetch('/diag?u='+encodeURIComponent(orig));
@@ -341,7 +391,7 @@ async function diagnose(orig){
   if(r.status===429)return 'Too many requests. Wait a moment and try again.';
   if(!r.ok)return 'Our server could not reach the provider: '+t.replace(/^Proxy error:\s*/,'').slice(0,160)+'. The provider may be offline, or may block this server.';
   const d=JSON.parse(t),tech=' [HTTP '+d.status+' · '+(d.type||'no type')+' · '+d.kind+' · '+d.host+']';
-  if(d.status===401||d.status===403)return 'The provider refused the connection. Common causes: expired account, another device already using its only connection, or the provider blocking data-center servers like this host.'+tech;
+  if(d.status===401||d.status===403||d.status===405)return 'The provider refused the connection. Most often the account is already playing on another device, since many accounts allow only one stream at a time. It can also be an expired account, or the provider blocking this server.'+tech;
   if(d.status===404)return 'The provider says this channel was not found. Try another channel or the other stream format.'+tech;
   if(d.status>=400)return 'The provider answered with an error. The channel may be offline or the account blocked.'+tech+(d.snippet?' '+d.snippet.replace(/\s+/g,' ').slice(0,100):'');
   if(d.kind==='HTML/XML page')return 'The provider sent a web page instead of video, which usually means a login problem, a connection limit, or an IP block.'+tech+' '+d.snippet.replace(/\s+/g,' ').slice(0,100);
@@ -353,6 +403,7 @@ function tryMode(orig,modes,k){
  const url=px(orig);
  teardown();
  if(k>=modes.length){
+  if(sess)sess.dead=true;
   if(window.IPTV_PROXY){status('Checking why this stream failed…');diagnose(orig).then(m=>{if(sess&&sess.orig===orig)status(m,'err')});}
   else{const mixed=location.protocol==='https:'&&orig.startsWith('http:');
   status(mixed?'Blocked: this page is HTTPS but the stream is HTTP. Run the proxy server (see setup notes).':'Could not play this stream. It may be offline, geo-blocked, use an unsupported codec, or block browser access (CORS).','err');}
@@ -360,7 +411,7 @@ function tryMode(orig,modes,k){
  }
  const m=modes[k],next=()=>tryMode(orig,modes,k+1);
  const bad=()=>{if(sess&&sess.started&&!sess.vod)reconnect('connection lost');else next()};
- if(sess){sess.k=k;sess.lastTs=Date.now()}
+ if(sess){sess.k=k;sess.lastTs=Date.now();sess.dead=false}
  status('Connecting…');
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
  v.onplaying=()=>{status('');if(sess)sess.started=true;$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>status('Buffering…');
@@ -403,7 +454,7 @@ function reconnect(why){
  setTimeout(()=>{if(sess===s)tryMode(s.orig,s.modes,k)},Math.min(1000*s.fails,5000));
 }
 setInterval(()=>{ /* watchdog: never-started streams advance to the next mode; frozen picture reconnects */
- if(!sess||sess.vod)return;
+ if(!sess||sess.vod||sess.dead)return;
  if(!sess.started){const mm=sess.modes[sess.k]||'';if(Date.now()-sess.lastTs>(/^(ts|tsalt|flv)$/.test(mm)?30000:12000))tryMode(sess.orig,sess.modes,sess.k+1);return}
  if(v.paused||v.seeking)return;
  if(Date.now()-sess.lastTs>10000)reconnect('stalled');
