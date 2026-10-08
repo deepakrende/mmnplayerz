@@ -116,6 +116,7 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-controls-time-remaining-display{display:none}
+#dbg{position:absolute;left:8px;bottom:56px;right:8px;margin:0;padding:6px 8px;background:rgba(0,0,0,.72);color:#9ff0c0;font:12px/1.4 ui-monospace,Consolas,monospace;white-space:pre-wrap;border-radius:8px;pointer-events:none;z-index:5}
 </style>
 </head>
 <body>
@@ -137,6 +138,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
   <div id="vwrap">
    <video id="v" controls autoplay playsinline webkit-playsinline x-webkit-airplay="allow"></video>
    <span id="live" hidden>● Live</span>
+   <pre id="dbg" hidden></pre>
    <div id="welcome">
     <div class="wc">
      <h2 id="whead">Your TV, in any browser</h2>
@@ -369,7 +371,7 @@ function tryMode(orig,modes,k){
  const t0=Date.now();v.pause();status('Buffering…');
  cush=setInterval(()=>{let ahead=0;try{const b=v.buffered;if(b.length)ahead=b.end(b.length-1)-v.currentTime}catch(e){}
   if(ahead>=6||Date.now()-t0>20000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},300)}
-v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion()}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion()};
+v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion()}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{dlog('waiting for data');status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion()};
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
  if(m==='hls'||m==='hlsalt'){
   const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
@@ -394,6 +396,7 @@ v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive
   if(window.mpegts&&mpegts.isSupported()){
    mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
+   {const E=mpegts.Events;mp.on(E.STATISTICS_INFO,s=>{dspeed=Math.round(s.speed||0)});E.LOADING_COMPLETE&&mp.on(E.LOADING_COMPLETE,()=>dlog('server closed the stream'));E.RECOVERED_EARLY_EOF&&mp.on(E.RECOVERED_EARLY_EOF,()=>dlog('connection dropped, recovered'))}
    mp.on(mpegts.Events.ERROR,(t,d,i)=>{const e='ts '+t+'/'+d+(i&&i.msg?' - '+i.msg:'');console.warn('[mpegts]',t,d,i);lastErr=(lastErr?lastErr+' | ':'')+e;bad()});
    go();
   }else next();
@@ -401,7 +404,12 @@ v.onplaying=()=>{status('');if(sess)sess.started=true;v.classList.toggle('islive
   v.src=url;v.onerror=bad;go();
  }
 }
+const DBG=/[?&]debug=1/.test(location.search),dl=[];let dspeed=0;
+function dlog(m){dl.push(new Date().toLocaleTimeString()+' '+m);if(dl.length>8)dl.shift()}
+if(DBG){$('dbg').hidden=false;setInterval(()=>{let a=0;try{const b=v.buffered;if(b.length)a=b.end(b.length-1)-v.currentTime}catch(e){}
+ $('dbg').textContent='mode '+(sess?sess.modes[sess.k]:'-')+' | download '+dspeed+' KB/s | buffer ahead '+a.toFixed(1)+'s | paused '+v.paused+'\n'+dl.join('\n')},500)}
 function reconnect(why){
+ dlog('reconnect: '+why);
  if(!sess)return;
  if(++sess.fails>6){status('Stream keeps dropping. The channel may be offline, or your provider limits simultaneous connections.','err');sess=null;return}
  status('Reconnecting… ('+why+')');
