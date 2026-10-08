@@ -1,7 +1,7 @@
 // IPTV Player: production server (Node 18+). Serves the player and a hardened stream proxy.
 // Env: PORT, ACCESS_PASSWORD, TRUST_PROXY=1 (Caddy/nginx) or render, RATE_LIMIT, MAX_STREAMS_PER_IP, ALLOW_INSECURE_TLS=1
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path');
-const dns = require('dns'), net = require('net'), crypto = require('crypto'), zlib = require('zlib');
+const dns = require('dns'), net = require('net'), crypto = require('crypto');
 
 const PORT = +process.env.PORT || 8787;
 const PASS = process.env.ACCESS_PASSWORD || '';
@@ -17,7 +17,7 @@ const px = u => '/proxy?u=' + encodeURIComponent(u);
 
 const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; " +
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src * data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; " +
-  "frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  "frame-ancestors 'none'; base-uri 'none'";
 const SEC = { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' };
 
 /* ---- block requests to private / internal addresses (SSRF protection) ---- */
@@ -85,110 +85,28 @@ const clientIp = req => {
   if (TRUST) { const x = (req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean); if (x.length) return x[x.length - 1]; }
   return req.socket.remoteAddress || '';
 };
-/* ---- sign-in: signed cookie, no database. Changing ACCESS_PASSWORD signs everyone out. ---- */
-const SECRET = crypto.createHash('sha256').update('mmn-session:' + PASS).digest();
-const SESSION_DAYS = 30;
-const sha = v => crypto.createHash('sha256').update(v).digest();
-const sign = v => crypto.createHmac('sha256', SECRET).update(v).digest('base64url');
-const makeToken = () => { const exp = Date.now() + SESSION_DAYS * 864e5; return exp + '.' + sign(String(exp)); };
-function validToken(t) {
-  const i = (t || '').indexOf('.'); if (i < 1) return false;
-  const exp = t.slice(0, i), sig = t.slice(i + 1);
-  if (!(+exp > Date.now())) return false;
-  const x = Buffer.from(sig), y = Buffer.from(sign(exp));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-const cookies = req => Object.fromEntries((req.headers.cookie || '').split(/;\s*/).filter(Boolean).map(c => { const i = c.indexOf('='); return [c.slice(0, i), c.slice(i + 1)]; }));
 function authed(req) {
   if (!PASS) return true;
-  if (validToken(cookies(req).mmn_session)) return true;
-  const m = /^Basic (.+)$/.exec(req.headers.authorization || '');   // still accepted for scripts / curl
+  const m = /^Basic (.+)$/.exec(req.headers.authorization || '');
   if (!m) return false;
-  return crypto.timingSafeEqual(sha(Buffer.from(m[1], 'base64').toString().split(':').slice(1).join(':')), sha(PASS));
+  const given = Buffer.from(m[1], 'base64').toString().split(':').slice(1).join(':');
+  const a = crypto.createHash('sha256').update(given).digest(), b = crypto.createHash('sha256').update(PASS).digest();
+  return crypto.timingSafeEqual(a, b);
 }
-const isHttps = req => !!TRUST_MODE && /https/i.test(req.headers['x-forwarded-proto'] || '');
-const setCookie = (req, val, maxAge) => 'mmn_session=' + val + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + (isHttps(req) ? '; Secure' : '');
-const hostOf = req => String((TRUST_MODE && req.headers['x-forwarded-host']) || req.headers.host || 'localhost').replace(/[^a-zA-Z0-9.:\-\[\]]/g, '');
-const originOf = req => (isHttps(req) ? 'https://' : 'http://') + hostOf(req);
-const tries = new Map();
-setInterval(() => { const n = Date.now(); for (const [k, v] of tries) if (v.reset < n) tries.delete(k); }, 60000).unref();
-const readBody = (req, max = 2048) => new Promise((ok, bad) => { let b = ''; req.on('data', c => { b += c; if (b.length > max) { req.destroy(); bad(new Error('big')); } }); req.on('end', () => ok(b)); req.on('error', bad); });
-
-/* ---- static files: read once, compressed once, ETag + caching ---- */
-const file = n => { try { return fs.readFileSync(path.join(__dirname, n)); } catch { return null; } };
-function prep(buf, type, cc, q = 9) {
-  const z = /text|svg|json|manifest|xml/.test(type);
-  return { type, cc, raw: buf, gz: z ? zlib.gzipSync(buf, { level: 9 }) : null,
-    br: z ? zlib.brotliCompressSync(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: q } }) : null,
-    etag: '"' + crypto.createHash('sha1').update(buf).digest('base64url').slice(0, 20) + '"' };
-}
-function send(req, res, a, extra = {}, status = 200) {
-  const ae = req.headers['accept-encoding'] || '';
-  let body = a.raw, enc = '';
-  if (a.br && /\bbr\b/.test(ae)) { body = a.br; enc = 'br'; } else if (a.gz && /\bgzip\b/.test(ae)) { body = a.gz; enc = 'gzip'; }
-  const h = { ...SEC, 'Content-Type': a.type, 'Cache-Control': a.cc, ETag: a.etag.slice(0, -1) + (enc ? '-' + enc : '') + '"', Vary: 'Accept-Encoding', ...extra };
-  if (enc) h['Content-Encoding'] = enc;
-  if (status === 200 && req.headers['if-none-match'] === h.ETag) { res.writeHead(304, h); return res.end(); }
-  h['Content-Length'] = body.length;
-  res.writeHead(status, h); res.end(req.method === 'HEAD' ? undefined : body);
-}
-const ASSETS = {
-  '/favicon.svg': ['favicon.svg', 'image/svg+xml', 'public, max-age=604800'],
-  '/apple-touch-icon.png': ['apple-touch-icon.png', 'image/png', 'public, max-age=604800'],
-  '/icon-192.png': ['icon-192.png', 'image/png', 'public, max-age=604800'],
-  '/icon-512.png': ['icon-512.png', 'image/png', 'public, max-age=604800'],
-  '/og.png': ['og.png', 'image/png', 'public, max-age=86400'],
-  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json', 'public, max-age=86400'],
-  '/robots.txt': ['robots.txt', 'text/plain; charset=utf-8', 'public, max-age=86400'],
-};
-const assets = new Map();
-for (const [url, [n, type, cc]] of Object.entries(ASSETS)) { const b = file(n); if (b) assets.set(url, prep(b, type, cc)); }
-const HTML = 'text/html; charset=utf-8';
-const landingRaw = file('landing.html'), loginRaw = file('login.html'), playerRaw = file('iptv-player.html');
-const player = playerRaw && prep(Buffer.from(playerRaw.toString('utf8').replace('<head>', '<head>\n<script>window.IPTV_PROXY=true' + (PASS ? ';window.IPTV_AUTH=true' : '') + '</script>')), HTML, 'private, no-cache');
-const landingCache = new Map();
-const landingFor = o => {
-  let a = landingCache.get(o);
-  if (!a && landingRaw) { if (landingCache.size > 20) landingCache.clear(); a = prep(Buffer.from(landingRaw.toString('utf8').replace(/\{\{ORIGIN\}\}/g, o)), HTML, 'no-cache'); landingCache.set(o, a); }
-  return a;
-};
-const loginPage = err => prep(Buffer.from(loginRaw.toString('utf8').replace('{{ERROR}}', err ? '<p class="err" role="alert">' + err + '</p>' : '')), HTML, 'no-store', 4);
-const NOINDEX = { 'X-Robots-Tag': 'noindex' };
 const fail = (res, code, msg) => { if (!res.headersSent) res.writeHead(code, { ...SEC, 'Content-Type': 'text/plain' }); res.end(msg); };
 
 const server = http.createServer(async (req, res) => {
-  const u = new URL(req.url, 'http://localhost'), p = u.pathname;
-  if (p === '/healthz') return fail(res, 200, 'ok');
-  if (assets.has(p)) return send(req, res, assets.get(p));
-  if (p === '/' || p === '/index.html') { const a = landingFor(originOf(req)); return a ? send(req, res, a) : fail(res, 500, 'landing.html not found'); }
-
-  if (p === '/login') {
-    if (!PASS || authed(req)) { res.writeHead(302, { Location: '/app' }); return res.end(); }
-    if (!loginRaw) return fail(res, 500, 'login.html not found');
-    if (req.method === 'POST') {
-      const o = req.headers.origin;
-      if (o) { try { if (new URL(o).host !== hostOf(req)) return fail(res, 403, 'Bad origin'); } catch { return fail(res, 403, 'Bad origin'); } }
-      const ip = clientIp(req), now = Date.now();
-      let t = tries.get(ip); if (!t || t.reset < now) { t = { n: 0, reset: now + 600000 }; tries.set(ip, t); }
-      if (++t.n > 8) return send(req, res, loginPage('Too many attempts. Please wait 10 minutes and try again.'), NOINDEX, 429);
-      let body = ''; try { body = await readBody(req); } catch { return fail(res, 413, 'Too large'); }
-      if (crypto.timingSafeEqual(sha(new URLSearchParams(body).get('password') || ''), sha(PASS))) {
-        tries.delete(ip);
-        res.writeHead(303, { Location: '/app', 'Set-Cookie': setCookie(req, makeToken(), SESSION_DAYS * 86400), 'Cache-Control': 'no-store' });
-        return res.end();
-      }
-      return send(req, res, loginPage('That password is not correct.'), NOINDEX, 401);
-    }
-    return send(req, res, loginPage(''), NOINDEX);
+  const u = new URL(req.url, 'http://localhost');
+  if (u.pathname === '/healthz') return fail(res, 200, 'ok');
+  if (u.pathname === '/' || u.pathname === '/index.html') {
+    try {
+      res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(fs.readFileSync(path.join(__dirname, 'landing.html')));
+    } catch { return fail(res, 500, 'landing.html not found'); }
   }
-  if (p === '/logout') { res.writeHead(303, { Location: '/', 'Set-Cookie': setCookie(req, '', 0), 'Cache-Control': 'no-store' }); return res.end(); }
+  if (!authed(req)) { res.writeHead(401, { ...SEC, 'WWW-Authenticate': 'Basic realm="IPTV Player"' }); return res.end('Password required'); }
 
-  if (!authed(req)) {
-    if (p === '/app') { res.writeHead(302, { Location: '/login' }); return res.end(); }
-    return fail(res, 401, 'Sign in required');
-  }
-
-  if (p === '/proxy' || p === '/diag') {
+  if (u.pathname === '/proxy' || u.pathname === '/diag') {
     if (req.method !== 'GET') return fail(res, 405, 'GET only');
     req.socket.setNoDelay(true);
     const site = req.headers['sec-fetch-site'];
@@ -225,36 +143,24 @@ const server = http.createServer(async (req, res) => {
       const ct = r.headers['content-type'] || '';
       const looksPlaylist = /mpegurl/i.test(ct) || /\.m3u8?$/i.test(new URL(r.finalUrl).pathname);
       if (looksPlaylist) {
-        // Some Xtream panels answer ".m3u8" with an endless MPEG-TS stream, so decide from the first bytes:
-        // a real playlist starts with #EXTM3U (buffer + rewrite it); anything else is streamed straight through.
+        // Peek at the first bytes: a real playlist starts with #EXTM3U. Some Xtream panels answer
+        // ".m3u8" with an endless MPEG-TS stream; buffering that would hang forever ("Connecting...").
+        const it = r[Symbol.asyncIterator]();
+        const first = await it.next();
+        const head = first.done ? Buffer.alloc(0) : first.value;
+        if (/^\uFEFF?\s*#EXTM3U/.test(head.toString('utf8', 0, 32))) {
+          const chunks = [head]; let size = head.length;
+          for (let n = await it.next(); !n.done; n = await it.next()) { size += n.value.length; if (size > MAX_PLAYLIST) { r.destroy(); return fail(res, 502, 'Playlist too large'); } chunks.push(n.value); }
+          const text = Buffer.concat(chunks).toString('utf8');
+          const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl) : text;
+          res.writeHead(r.statusCode, { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
+          return res.end(body);
+        }
         const o = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
         for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) o[k] = r.headers[k];
-        await new Promise(resolve => {
-          let mode = null, size = 0; const chunks = [];
-          r.on('error', () => { if (mode === 'stream') res.end(); else if (!res.headersSent) fail(res, 502, 'Proxy error: upstream failed'); resolve(); });
-          r.on('data', c => {
-            if (mode === null) {
-              mode = /^\uFEFF?\s*#EXTM3U/.test(c.toString('utf8', 0, 32)) ? 'pl' : 'stream';
-              if (mode === 'stream') res.writeHead(r.statusCode, o);
-            }
-            if (mode === 'pl') { size += c.length; if (size > MAX_PLAYLIST) r.destroy(); else chunks.push(c); }
-            else if (!res.write(c)) { r.pause(); res.once('drain', () => r.resume()); }
-          });
-          r.on('end', () => {
-            if (mode === 'stream') res.end();
-            else {
-              const text = Buffer.concat(chunks).toString('utf8');
-              const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl) : text;
-              res.writeHead(r.statusCode, { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
-              res.end(body);
-            }
-            resolve();
-          });
-          r.on('close', () => {
-            if (!res.writableEnded) { if (mode === 'pl' && size > MAX_PLAYLIST) fail(res, 502, 'Playlist too large'); else res.end(); }
-            resolve();
-          });
-        });
+        res.writeHead(r.statusCode, o);
+        res.write(head);
+        r.on('error', () => res.end()); r.pipe(res);
         return;
       }
       const out = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
@@ -265,7 +171,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (p === '/app') return player ? send(req, res, player, NOINDEX) : fail(res, 500, 'iptv-player.html not found');
+  if (u.pathname === '/app') {
+    try {
+      const html = fs.readFileSync(path.join(__dirname, 'iptv-player.html'), 'utf8').replace('<head>', '<head>\n<script>window.IPTV_PROXY=true</script>');
+      res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(html);
+    } catch { return fail(res, 500, 'iptv-player.html not found'); }
+  }
   fail(res, 404, 'Not found');
 });
 server.keepAliveTimeout = 65000; server.headersTimeout = 66000;
