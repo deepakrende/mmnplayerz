@@ -1,5 +1,6 @@
 FROM node:20-alpine
 WORKDIR /app
+RUN apk add --no-cache ffmpeg
 COPY server-prod.js iptv-player.html landing.html ./
 USER node
 EXPOSE 8787
