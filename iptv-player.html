@@ -194,7 +194,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
   </div>
   <label class="chk"><input type="checkbox" id="xrem" checked> Remember on this device</label>
   <div id="xmsg"></div>
-  <div class="acts"><button value="x">Close</button><button type="button" class="pri" id="xgo">Connect</button></div>
+  <div class="acts"><button type="button" id="xout" title="Remove the saved login from this device">Forget login</button><button value="x">Close</button><button type="button" class="pri" id="xgo">Connect</button></div>
  </form>
 </dialog>
 
@@ -631,6 +631,17 @@ $('xgo').onclick=async()=>{
   xm(net?(mixed?'Blocked: this page is HTTPS but the server is HTTP. Use the proxy server (see setup notes).':'Could not reach the server. Run it through the proxy: start server.js (node server.js) and open http://localhost:8787 instead of this file.'):e.message,1);
  }finally{$('xgo').disabled=false}
 };
+$('xout').onclick=()=>{try{localStorage.removeItem('iptv_xt')}catch(e){}acct=null;location.reload()};
+/* sign in automatically when this device has a saved login */
+(function(){
+ let s=null;try{s=JSON.parse(localStorage.getItem('iptv_xt')||'null')}catch(e){}
+ if(!s||!s.s||!s.u||!s.p)return;
+ $('xs').value=s.s;$('xu').value=s.u;$('xp').value=s.p;$('xfmt').value=s.f||'m3u8';
+ status('Signing in…');
+ Promise.resolve($('xgo').onclick()).then(()=>{
+  if(!acct){status('Could not sign in automatically: '+($('xmsg').textContent||'unknown error')+' Open Xtream login to check your details.','err');setTimeout(()=>{if(!acct)status('')},9000)}
+ });
+})();
 render();
 })();
 </script>
