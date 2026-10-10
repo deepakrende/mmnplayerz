@@ -30,6 +30,8 @@ button.big{padding:.8rem 1.2rem;font-weight:600}
 .src input{flex:1;min-width:0;background:none;border:0;outline:0;padding:.4rem 1rem}
 .src button{border:0;border-radius:999px}
 .tools{display:flex;gap:.5rem;align-items:center}
+#acc{font-size:.8rem;color:var(--dim);white-space:nowrap}#acc a{color:var(--acc2);margin-left:.35rem}#acc.soon #accT{color:var(--err)}
+@media(max-width:700px){#accT{display:none}}
 main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(21rem,29vw,30rem);gap:1.25rem;padding:1.25rem}
 .stage{display:flex;flex-direction:column;gap:1rem;min-width:0;min-height:0}
 #vwrap{position:relative;aspect-ratio:16/9;width:min(100%,calc((100dvh - 11.5rem)*16/9));margin:0 auto;background:#000;border-radius:1.25rem;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
@@ -129,6 +131,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
  <div class="tools">
   <button class="ib" id="file" title="Open playlist file" aria-label="Open playlist file"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
   <button class="ib" id="paste" title="Paste M3U text" aria-label="Paste M3U text"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/></svg></button>
+  <span id="acc" hidden><span id="accT"></span> <a href="/logout">Sign out</a></span>
   <button id="xt">Xtream login</button>
  </div>
  <input id="fi" type="file" accept=".m3u,.m3u8,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl" hidden>
@@ -371,7 +374,8 @@ async function diagnose(orig){
  try{
   const r=await fetch('/diag?u='+encodeURIComponent(orig));
   const t=await r.text();
-  if(r.status===429)return 'Too many requests. Wait a moment and try again.';
+  if(r.status===401)return 'Your access has ended or was removed. Reload the page and enter a valid access code.';
+  if(r.status===429)return t.includes('another device')?'This access code is already being used on another device. Stop it there first, or ask the owner for your own code.':'Too many requests. Wait a moment and try again.';
   if(!r.ok)return 'Our server could not reach the provider: '+t.replace(/^Proxy error:\s*/,'').slice(0,160)+'. The provider may be offline, or may block this server.';
   const d=JSON.parse(t),tech=' [HTTP '+d.status+' · '+(d.type||'no type')+' · '+d.kind+' · '+d.host+']';
   if(d.status===401||d.status===403)return 'The provider refused the connection. Common causes: expired account, another device already using its only connection, or the provider blocking data-center servers like this host.'+tech;
@@ -631,6 +635,22 @@ $('xgo').onclick=async()=>{
   xm(net?(mixed?'Blocked: this page is HTTPS but the server is HTTP. Use the proxy server (see setup notes).':'Could not reach the server. Run it through the proxy: start server.js (node server.js) and open http://localhost:8787 instead of this file.'):e.message,1);
  }finally{$('xgo').disabled=false}
 };
+
+/* ---- access code session: show who/when, and go back to the gate if access ended ---- */
+async function checkSession(){
+ if(!window.IPTV_PROXY)return;
+ try{
+  const r=await fetch('/session',{cache:'no-store'});
+  if(r.status===401){const j=await r.json().catch(()=>({}));location.href='/gate?why='+encodeURIComponent(['expired','revoked','devices','paused','signedout'].includes(j.error)?j.error:'expired');return}
+  const s=await r.json();
+  const box=$('acc');if(!s.name){box.hidden=true;return}
+  let t=s.name;
+  if(s.expires){const d=Math.ceil((s.expires-Date.now())/86400000);t+=' · '+(d>90?'until '+new Date(s.expires).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):d>1?d+' days left':d===1?'1 day left':'expires today');box.classList.toggle('soon',d<=3)}
+  $('accT').textContent=t;box.hidden=false;
+ }catch(e){}
+}
+checkSession();setInterval(checkSession,300000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkSession()});
 $('xout').onclick=()=>{try{localStorage.removeItem('iptv_xt')}catch(e){}acct=null;location.reload()};
 /* sign in automatically when this device has a saved login */
 (function(){
