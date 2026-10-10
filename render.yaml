@@ -9,3 +9,13 @@ services:
         value: render
       - key: ACCESS_PASSWORD
         sync: false        # Render asks you for this value on first deploy
+      - key: ADMIN_PASSWORD
+        sync: false          # password for your admin page at /admin (use a long one)
+      - key: DATA_DIR
+        value: /data         # where the member list is saved (the disk below)
+      - key: SESSION_SECRET
+        generateValue: true  # keeps members signed in across restarts; do not change it later
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
