@@ -1,7 +1,7 @@
 // IPTV Player: production server (Node 18+). Serves the player and a hardened stream proxy.
 // Env: PORT, ADMIN_PASSWORD (turns on /admin to manage member access codes), DATA_DIR (Render Disk mount path where members are saved), SESSION_SECRET, ACCESS_CODES (optional first import), ACCESS_PASSWORD (old single password, only used when there is no admin and no members), TRUST_PROXY=1 (Caddy/nginx) or render, RATE_LIMIT, MAX_STREAMS_PER_IP, ALLOW_INSECURE_TLS=1
 const http = require('http'), https = require('https'), fs = require('fs'), path = require('path');
-const dns = require('dns'), net = require('net'), crypto = require('crypto');
+const dns = require('dns'), net = require('net'), crypto = require('crypto'), zlib = require('zlib');
 
 const PORT = +process.env.PORT || 8787;
 const PASS = process.env.ACCESS_PASSWORD || '';
@@ -129,12 +129,12 @@ async function pumpLive(res, first, target, hd, signal, tx) {
 }
 function emptyStream() { const { Readable } = require('stream'); const s = new Readable({ read() {} }); s.push(null); return s; }
 
-function rewrite(text, base) {
+function rewrite(text, base, sfx = '') {
   return text.split(/\r?\n/).map(l => {
     const t = l.trim();
     if (!t) return l;
-    if (t[0] === '#') return l.replace(/URI="([^"]+)"/g, (m, u) => { try { return 'URI="' + px(new URL(u, base).href) + '"'; } catch { return m; } });
-    try { return px(new URL(t, base).href); } catch { return l; }
+    if (t[0] === '#') return l.replace(/URI="([^"]+)"/g, (m, u) => { try { return 'URI="' + px(new URL(u, base).href) + sfx + '"'; } catch { return m; } });
+    try { return px(new URL(t, base).href) + sfx; } catch { return l; }
   }).join('\n');
 }
 
@@ -185,7 +185,7 @@ const clean = m => ({
   id: m.id || newId(), name: String(m.name || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 60), code: String(m.code || '').toUpperCase().replace(/[^A-Z0-9-]/g, ''),
   expires: m.expires == null || Number.isNaN(+m.expires) ? null : +m.expires, paused: !!m.paused,
   devices: +m.devices > 0 ? Math.floor(+m.devices) : DEFAULT_DEVICES, screens: +m.screens > 0 ? Math.floor(+m.screens) : 1,
-  note: String(m.note || '').slice(0, 200), epoch: +m.epoch || 0, createdAt: +m.createdAt || Date.now()
+  note: String(m.note || '').slice(0, 200), epoch: +m.epoch || 0, createdAt: +m.createdAt || Date.now(), lastSeenAt: +m.lastSeenAt || 0
 });
 function parseCodes(raw) {                      // optional first import from ACCESS_CODES: name:code:expiry[:devices[:screens]] (use | to give a time)
   const list = [];
@@ -199,7 +199,7 @@ function parseCodes(raw) {                      // optional first import from AC
   return list;
 }
 
-let STORE = { members: [], usage: {} };
+let STORE = { members: [], usage: {}, daily: {}, hourly: {}, titles: {}, peak: {} };
 const storeInfo = { persistent: false, mounted: false, dir: DATA_DIR, error: '' };
 const STORE_FILE = DATA_DIR ? path.join(DATA_DIR, 'members.json') : '';
 let BYFP = new Map(), HASHES = [], usageDirty = false;
@@ -216,7 +216,14 @@ function saveStore() {
   try {
     const cut = istDay(Date.now() - 120 * 86400000);
     for (const id of Object.keys(STORE.usage)) { for (const d of Object.keys(STORE.usage[id])) if (d < cut) delete STORE.usage[id][d]; }
-    const data = { version: 1, members: STORE.members.map(m => clean(m)), usage: STORE.usage };
+    const cutD = istDay(Date.now() - 120 * 86400000), cutT = istDay(Date.now() - 45 * 86400000);
+    for (const k of ['daily', 'hourly', 'peak']) for (const d of Object.keys(STORE[k])) if (d < cutD) delete STORE[k][d];
+    for (const d of Object.keys(STORE.titles)) {
+      if (d < cutT) { delete STORE.titles[d]; continue; }
+      const ks = Object.keys(STORE.titles[d]);
+      if (ks.length > 400) { ks.sort((a, b) => STORE.titles[d][b][1] - STORE.titles[d][a][1]); for (const k of ks.slice(300)) delete STORE.titles[d][k]; }
+    }
+    const data = { version: 1, members: STORE.members.map(m => clean(m)), usage: STORE.usage, daily: STORE.daily, hourly: STORE.hourly, titles: STORE.titles, peak: STORE.peak };
     fs.writeFileSync(STORE_FILE + '.tmp', JSON.stringify(data)); fs.renameSync(STORE_FILE + '.tmp', STORE_FILE);
     usageDirty = false; storeInfo.error = ''; return true;
   } catch (e) { storeInfo.error = e.message; console.log('[admin] could not save members: ' + e.message); return false; }
@@ -229,16 +236,35 @@ function loadStore() {
       try { storeInfo.mounted = fs.statSync(DATA_DIR).dev !== fs.statSync('/').dev; } catch {}
       if (fs.existsSync(STORE_FILE)) {
         const j = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
-        STORE = { members: (j.members || []).map(clean).filter(m => m.name && normCode(m.code).length >= 8), usage: j.usage || {} };
+        STORE = { members: (j.members || []).map(clean).filter(m => m.name && normCode(m.code).length >= 8), usage: j.usage || {}, daily: j.daily || null, hourly: j.hourly || {}, titles: j.titles || {}, peak: j.peak || {} };
+        if (!STORE.daily) { STORE.daily = {}; for (const u of Object.values(STORE.usage)) for (const [d, v] of Object.entries(u)) STORE.daily[d] = (STORE.daily[d] || 0) + v; }   // history from before Insights existed
         rebuild(); return;
       }
     } catch (e) { storeInfo.persistent = false; storeInfo.error = e.message; console.log('[admin] cannot use DATA_DIR (' + DATA_DIR + '): ' + e.message); }
   }
-  STORE = { members: parseCodes(process.env.ACCESS_CODES), usage: {} };
+  STORE = { members: parseCodes(process.env.ACCESS_CODES), usage: {}, daily: {}, hourly: {}, titles: {}, peak: {} };
   rebuild(); if (storeInfo.persistent && STORE.members.length) saveStore();
 }
 const istDay = (t = Date.now()) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-function addUsage(m, mb) { if (!(mb > 0)) return; const d = istDay(), u = STORE.usage[m.id] || (STORE.usage[m.id] = {}); u[d] = Math.round(((u[d] || 0) + mb) * 10) / 10; usageDirty = true; }
+const r2 = x => Math.round(x * 100) / 100;
+const istHour = (t = Date.now()) => new Date(t + 19800000).getUTCHours();
+const METERS = new Set(), VIEWS = new Map();
+function account(m, mb, meta) {
+  if (!(mb > 0)) return;
+  const now = Date.now(), d = istDay(now), h = istHour(now);
+  const u = STORE.usage[m.id] || (STORE.usage[m.id] = {}); u[d] = r2((u[d] || 0) + mb);
+  STORE.daily[d] = r2((STORE.daily[d] || 0) + mb);
+  const H = STORE.hourly[d] || (STORE.hourly[d] = new Array(24).fill(0)); H[h] = r2(H[h] + mb);
+  if (meta && meta.n) { const T = STORE.titles[d] || (STORE.titles[d] = {}), key = meta.k + '|' + meta.n, e = T[key] || (T[key] = [0, 0]); e[1] = r2(e[1] + mb); }
+  usageDirty = true;
+}
+function trackView(w, meta) {          // one "view" = one device starting a title; the same title again within 30 minutes is the same view
+  const key = w.entry.fp + '|' + w.device + '|' + meta.k + '|' + meta.n, now = Date.now(), last = VIEWS.get(key);
+  VIEWS.set(key, now); if (last && now - last < 30 * 60000) return;
+  const T = STORE.titles[istDay(now)] || (STORE.titles[istDay(now)] = {}), k2 = meta.k + '|' + meta.n, e = T[k2] || (T[k2] = [0, 0]); e[0]++; usageDirty = true;
+}
+setInterval(() => { for (const f of METERS) f(); }, (+process.env.METER_SECONDS || 15) * 1000).unref();
+setInterval(() => { const cut = Date.now() - 3600000; for (const [k, t] of VIEWS) if (t < cut) VIEWS.delete(k); }, 600000).unref();
 function usageOf(m) {
   const u = STORE.usage[m.id] || {}, today = istDay(), mon = today.slice(0, 7); let t = 0, mo = 0, tot = 0;
   for (const [d, v] of Object.entries(u)) { tot += v; if (d === today) t += v; if (d.startsWith(mon)) mo += v; }
@@ -251,7 +277,7 @@ setInterval(() => {            // cut running streams when access ends (expiry, 
   for (const fp of OPEN.keys()) { const m = BYFP.get(fp); if (!m || m.paused || Date.now() > expOf(m)) killMember(fp); }
   if (usageDirty) saveStore();
 }, 20000).unref();
-process.on('SIGTERM', () => { try { saveStore(); } catch {} process.exit(0); });
+process.on('SIGTERM', () => { try { for (const f of METERS) f(); saveStore(); } catch {} process.exit(0); });
 
 const sign = obj => { const body = Buffer.from(JSON.stringify(obj)).toString('base64url'); return body + '.' + crypto.createHmac('sha256', SECRET).update(body).digest('base64url'); };
 function verify(tok) {
@@ -277,9 +303,12 @@ function memberOf(req) {
   let devs = DEVICES.get(e.fp); if (!devs) DEVICES.set(e.fp, devs = new Map());
   if (!devs.has(p.d)) { pruneDevices(devs); if (devs.size >= e.devices) return { error: 'devices', entry: e }; }
   devs.set(p.d, Date.now());
+  { const t = Date.now(); if (!e.lastSeenAt || t - e.lastSeenAt > 300000) { e.lastSeenAt = t; usageDirty = true; } }
   return { entry: e, device: p.d };
 }
-function streamInc(w, res) { let m = STREAMS.get(w.entry.fp); if (!m) STREAMS.set(w.entry.fp, m = new Map()); m.set(w.device, (m.get(w.device) || 0) + 1); let o = OPEN.get(w.entry.fp); if (!o) OPEN.set(w.entry.fp, o = new Set()); o.add(res); }
+function streamInc(w, res) { let m = STREAMS.get(w.entry.fp); if (!m) STREAMS.set(w.entry.fp, m = new Map()); m.set(w.device, (m.get(w.device) || 0) + 1); let o = OPEN.get(w.entry.fp); if (!o) OPEN.set(w.entry.fp, o = new Set()); o.add(res);
+  let n = 0; for (const mm of STREAMS.values()) for (const c of mm.values()) if (c > 0) n++;
+  const d = istDay(); if (n > (STORE.peak[d] || 0)) { STORE.peak[d] = n; usageDirty = true; } }
 function streamDec(w, res) { const m = STREAMS.get(w.entry.fp); if (m) { const n = (m.get(w.device) || 1) - 1; n ? m.set(w.device, n) : m.delete(w.device); } const o = OPEN.get(w.entry.fp); if (o) { o.delete(res); if (!o.size) OPEN.delete(w.entry.fp); } }
 function otherScreens(w) { const m = STREAMS.get(w.entry.fp); let n = 0; if (m) for (const [d, c] of m) if (d !== w.device && c > 0) n++; return n; }
 
@@ -315,7 +344,51 @@ function readBody(req, max = 8192) {
     req.on('end', () => resolve(Buffer.concat(ch).toString())); req.on('error', reject);
   });
 }
-const sendJson = (res, code, o, extra) => { res.writeHead(code, { ...SEC, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(extra || {}) }); res.end(JSON.stringify(o)); };
+function acceptsEnc(req, enc) { return new RegExp('\\b' + enc + '\\b').test(String((req && req.headers['accept-encoding']) || '')); }
+function sendJson(res, code, o, extra) {
+  const h = { ...SEC, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(extra || {}) };
+  let body = Buffer.from(JSON.stringify(o));
+  if (body.length > 1024 && acceptsEnc(res.req, 'gzip')) { body = zlib.gzipSync(body, { level: 5 }); h['Content-Encoding'] = 'gzip'; h.Vary = 'Accept-Encoding'; }
+  h['Content-Length'] = body.length; res.writeHead(code, h); res.end(body);
+}
+const STATIC = new Map();   // file -> prepared copy (raw, gzip, brotli, etag); rebuilt only when the file changes
+function staticPage(file, transform) {
+  const fp = path.join(__dirname, file), st = fs.statSync(fp); let c = STATIC.get(file);
+  if (!c || c.mtime !== st.mtimeMs) {
+    let raw = fs.readFileSync(fp, 'utf8'); if (transform) raw = transform(raw);
+    const buf = Buffer.from(raw);
+    c = { mtime: st.mtimeMs, raw: buf, gz: zlib.gzipSync(buf, { level: 9 }), br: zlib.brotliCompressSync(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } }), etag: 'W/"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"' };
+    STATIC.set(file, c);
+  }
+  return c;
+}
+function sendStatic(req, res, c, type) {
+  const h = { ...SEC, 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: c.etag, Vary: 'Accept-Encoding' };
+  const inm = String(req.headers['if-none-match'] || '');
+  if (inm && inm.split(',').some(x => x.trim() === c.etag)) { res.writeHead(304, h); return res.end(); }
+  let body = c.raw;
+  if (acceptsEnc(req, 'br')) { body = c.br; h['Content-Encoding'] = 'br'; } else if (acceptsEnc(req, 'gzip')) { body = c.gz; h['Content-Encoding'] = 'gzip'; }
+  h['Content-Length'] = body.length; res.writeHead(200, h); res.end(req.method === 'HEAD' ? undefined : body);
+}
+/* channel lists (get_live_streams ...) are big, rarely change and are asked for again at every visit: keep a compressed copy for a few minutes */
+const LIST_TTL = (+process.env.LIST_CACHE_SECONDS || 300) * 1000, LIST_MAX = (+process.env.LIST_CACHE_MB || 80) * 1048576, LIST_RAW_MAX = 64 * 1048576;
+const LIST_ACTIONS = new Set(['get_live_categories', 'get_live_streams', 'get_vod_categories', 'get_vod_streams', 'get_series_categories', 'get_series']);
+const LISTC = new Map(); let listBytes = 0;
+const LIST_HDR = 'private, max-age=' + Math.round(LIST_TTL / 1000) + ', stale-while-revalidate=86400';
+function listActionOf(t) { try { const x = new URL(t); return /\/player_api\.php$/i.test(x.pathname) && LIST_ACTIONS.has(x.searchParams.get('action')) ? x.searchParams.get('action') : ''; } catch { return ''; } }
+function listGet(key) { const e = LISTC.get(key); if (!e) return null; if (Date.now() - e.t > LIST_TTL) { listBytes -= e.gz.length; LISTC.delete(key); return null; } return e; }
+function listSet(key, e) {
+  if (e.gz.length > LIST_MAX / 3) return;
+  const old = LISTC.get(key); if (old) { listBytes -= old.gz.length; LISTC.delete(key); }
+  LISTC.set(key, e); listBytes += e.gz.length;
+  for (const [k, v] of LISTC) { if (listBytes <= LIST_MAX) break; listBytes -= v.gz.length; LISTC.delete(k); }
+}
+setInterval(() => { for (const k of [...LISTC.keys()]) listGet(k); }, 60000).unref();
+function sendList(req, res, e) {
+  const h = { ...SEC, 'Content-Type': e.ct, 'Cache-Control': LIST_HDR, Vary: 'Accept-Encoding' };
+  if (acceptsEnc(req, 'gzip')) { h['Content-Encoding'] = 'gzip'; h['Content-Length'] = e.gz.length; res.writeHead(200, h); return res.end(e.gz); }
+  const raw = zlib.gunzipSync(e.gz); h['Content-Length'] = raw.length; res.writeHead(200, h); res.end(raw);
+}
 
 async function handleGate(req, res, u) {
   if (!gateOn()) { res.writeHead(302, { Location: '/app' }); return res.end(); }
@@ -353,10 +426,31 @@ async function handleGate(req, res, u) {
 /* ---------- admin ---------- */
 const adminHash = ADMIN_PASSWORD ? crypto.createHash('sha256').update(ADMIN_PASSWORD).digest() : null;
 const adminOk = req => { const p = verify(cookieOf(req, 'mmn_admin')); return !!(p && p.a === 1 && p.x > Date.now()); };
+function insights(days) {
+  days = [7, 30, 60].includes(days) ? days : 30;
+  const now = Date.now(), keys = []; for (let i = days - 1; i >= 0; i--) keys.push(istDay(now - i * 86400000));
+  const today = istDay(now), mon = today.slice(0, 7);
+  const daily = keys.map(d => ({ d, mb: Math.round(STORE.daily[d] || 0), peak: STORE.peak[d] || 0 }));
+  const hourly = new Array(24).fill(0); let hourDays = 0;
+  for (const d of keys) { const H = STORE.hourly[d]; if (H) { hourDays++; for (let h = 0; h < 24; h++) hourly[h] += H[h] || 0; } }
+  const T = new Map();
+  for (const d of keys) { const D = STORE.titles[d]; if (!D) continue; for (const [key, v] of Object.entries(D)) { const i = key.indexOf('|'), e = T.get(key) || { k: key.slice(0, i), name: key.slice(i + 1), views: 0, mb: 0 }; e.views += v[0] || 0; e.mb += v[1] || 0; T.set(key, e); } }
+  const titles = [...T.values()].map(e => ({ ...e, mb: Math.round(e.mb) }));
+  const topMb = titles.slice().sort((a, b) => b.mb - a.mb).slice(0, 15), topViews = titles.slice().sort((a, b) => b.views - a.views || b.mb - a.mb).slice(0, 15);
+  const members = STORE.members.map(m => { const u = STORE.usage[m.id] || {}; let mb = 0; for (const d of keys) mb += u[d] || 0; return { name: m.name, mb: Math.round(mb) }; }).filter(x => x.mb > 0).sort((a, b) => b.mb - a.mb).slice(0, 8);
+  const cut = now - 14 * 86400000;
+  const inactive = STORE.members.filter(m => !m.paused && expOf(m) > now && (!m.lastSeenAt || m.lastSeenAt < cut))
+    .map(m => ({ name: m.name, days: m.lastSeenAt ? Math.floor((now - m.lastSeenAt) / 86400000) : null, expires: m.expires }))
+    .sort((a, b) => (b.days == null ? 9999 : b.days) - (a.days == null ? 9999 : a.days)).slice(0, 20);
+  let month = 0; for (const [d, v] of Object.entries(STORE.daily)) if (d.startsWith(mon)) month += v;
+  const ist = new Date(now + 19800000), elapsed = (+today.slice(8) - 1) + (ist.getUTCHours() * 60 + ist.getUTCMinutes()) / 1440, dim = new Date(+today.slice(0, 4), +today.slice(5, 7), 0).getDate();
+  return { days, now, daily, hourly: hourly.map(Math.round), hourDays, topMb, topViews, members, inactive, titlesTracked: titles.length,
+    totals: { today: Math.round(STORE.daily[today] || 0), month: Math.round(month), projected: elapsed >= 0.5 ? Math.round(month / elapsed * dim) : null, daysInMonth: dim } };
+}
 function memberView(m) {
   const devs = DEVICES.get(m.fp); if (devs) pruneDevices(devs);
   const st = STREAMS.get(m.fp); let watching = 0; if (st) for (const c of st.values()) if (c > 0) watching++;
-  let last = 0; if (devs) for (const t of devs.values()) last = Math.max(last, t);
+  let last = m.lastSeenAt || 0; if (devs) for (const t of devs.values()) last = Math.max(last, t);
   return { id: m.id, name: m.name, code: m.code, expires: m.expires, expiresDate: m.expires == null ? '' : istDay(m.expires), paused: m.paused, devices: m.devices, screens: m.screens, note: m.note,
     createdAt: m.createdAt, devicesUsed: devs ? devs.size : 0, watching, lastSeen: last || null, usage: usageOf(m) };
 }
@@ -380,8 +474,7 @@ async function handleAdmin(req, res, u) {
   const p = u.pathname;
   if (p === '/admin' || p === '/admin/') {
     if (req.method !== 'GET') return fail(res, 405, 'GET only');
-    let html; try { html = fs.readFileSync(path.join(__dirname, 'admin.html')); } catch { return fail(res, 500, 'admin.html is missing from the server files'); }
-    res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(html);
+    try { return sendStatic(req, res, staticPage('admin.html'), 'text/html; charset=utf-8'); } catch { return fail(res, 500, 'admin.html is missing from the server files'); }
   }
   const site = req.headers['sec-fetch-site'];
   if (req.method !== 'GET' && ((site && site !== 'same-origin') || req.headers['x-admin'] !== '1')) return fail(res, 403, 'Not allowed');
@@ -400,6 +493,7 @@ async function handleAdmin(req, res, u) {
     if (p === '/admin/api/state' && req.method === 'GET') {
       return sendJson(res, 200, { now: Date.now(), storage: { persistent: storeInfo.persistent, mounted: storeInfo.mounted, error: storeInfo.error, dir: storeInfo.dir, wantsDisk: !DATA_DIR }, members: STORE.members.map(memberView) });
     }
+    if (p === '/admin/api/insights' && req.method === 'GET') return sendJson(res, 200, insights(+u.searchParams.get('days') || 30));
     if (p === '/admin/api/members' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req) || '{}');
       if (STORE.members.length >= 500) throw new Error('Member limit reached (500)');
@@ -443,14 +537,20 @@ console.log('[access] ' + (gateOn() ? 'access codes are ON: ' + STORE.members.le
 if (ADMIN_PASSWORD) console.log('[admin] admin page is ON at /admin · saved on disk: ' + (storeInfo.persistent ? 'yes' + (storeInfo.mounted ? '' : ' (WARNING: ' + DATA_DIR + ' does not look like a separate disk, so it may be wiped on deploy)') : 'NO, members will be lost on restart. Attach a Render Disk and set DATA_DIR'));
 if (gateOn() && !process.env.SESSION_SECRET) console.log('[access] WARNING: SESSION_SECRET is not set, so everyone is signed out whenever the server restarts.');
 
-const server = http.createServer(async (req, res) => {
+/* Any unexpected error is logged and answered with a 500 instead of crashing the whole server (a crash shows up as 502 for everyone). */
+process.on('unhandledRejection', e => console.log('[error] unhandled: ' + (e && e.stack || e)));
+process.on('uncaughtException', e => console.log('[error] uncaught: ' + (e && e.stack || e)));
+const server = http.createServer((req, res) => {
+  handle(req, res).catch(e => {
+    console.log('[error] ' + req.method + ' ' + String(req.url).split('?')[0] + ': ' + (e && e.stack || e));
+    try { if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('Server error'); } catch {}
+  });
+});
+async function handle(req, res) {
   const u = new URL(req.url, 'http://localhost');
   if (u.pathname === '/healthz') return fail(res, 200, 'ok');
   if (u.pathname === '/' || u.pathname === '/index.html') {
-    try {
-      res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      return res.end(fs.readFileSync(path.join(__dirname, 'landing.html')));
-    } catch { return fail(res, 500, 'landing.html not found'); }
+    try { return sendStatic(req, res, staticPage('landing.html'), 'text/html; charset=utf-8'); } catch { return fail(res, 500, 'landing.html not found'); }
   }
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return handleAdmin(req, res, u);
   if (u.pathname === '/gate') return handleGate(req, res, u);
@@ -483,16 +583,22 @@ const server = http.createServer(async (req, res) => {
     if ((conc.get(ip) || 0) >= MAX_CONC) return fail(res, 429, 'Too many open streams');
     if (who && otherScreens(who) >= who.entry.screens) return fail(res, 429, 'This access code is already in use on another device');
     const target = u.searchParams.get('u') || '';
+    const meta = { n: String(u.searchParams.get('n') || '').replace(/[\u0000-\u001f]/g, ' ').slice(0, 80), k: ['live', 'movie', 'episode'].includes(u.searchParams.get('k')) ? u.searchParams.get('k') : '' };
+    if (u.pathname !== '/proxy' || /player_api\.php/i.test(target) || !meta.k) meta.n = meta.k = '';
     const ac = new AbortController();
     conc.set(ip, (conc.get(ip) || 0) + 1);
-    if (who) streamInc(who, res);
-    const b0 = req.socket.bytesWritten;
+    if (who) { streamInc(who, res); if (meta.n) trackView(who, meta); }
+    let lastB = req.socket.bytesWritten, total = 0;
+    const sample = () => { const cur = req.socket.bytesWritten, d = cur - lastB; lastB = cur; if (d > 0) { total += d; if (who) account(who.entry, d / 1e6, meta); } };
+    if (who) METERS.add(sample);
     let done = false;
-    const release = () => { if (!done) { done = true; const c = (conc.get(ip) || 1) - 1; c ? conc.set(ip, c) : conc.delete(ip); if (who) { streamDec(who, res); const mb = (req.socket.bytesWritten - b0) / 1e6; addUsage(who.entry, mb); if (mb >= 1) console.log('[usage] member=' + who.entry.name + ' MB=' + mb.toFixed(1)); } } };
+    const release = () => { if (!done) { done = true; const c = (conc.get(ip) || 1) - 1; c ? conc.set(ip, c) : conc.delete(ip); if (who) { streamDec(who, res); sample(); METERS.delete(sample); if (total >= 1e6) console.log('[usage] member=' + who.entry.name + ' MB=' + (total / 1e6).toFixed(1)); } } };
     res.on('close', () => { ac.abort(); release(); });
     try {
       const hd = { 'User-Agent': UA, Accept: '*/*' };
       if (req.headers.range) hd.Range = req.headers.range;
+      const listAct = u.pathname === '/proxy' ? listActionOf(target) : '';
+      if (listAct) { const hit = listGet(target); if (hit) return sendList(req, res, hit); }
       const r = await upstream(target, hd, ac.signal);
       if (u.pathname === '/diag') {
         const chunks = []; let n = 0;
@@ -510,6 +616,26 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ status: r.statusCode, type: r.headers['content-type'] || '', kind, bytes: b.length, host: new URL(r.finalUrl).host, redirected: r.finalUrl !== target, snippet }));
       }
       const ct = r.headers['content-type'] || '';
+      if (listAct && r.statusCode === 200 && !r.headers['content-encoding'] && /json|text/i.test(ct)) {
+        const it = r[Symbol.asyncIterator](), chunks = []; let size = 0, streamed = null;
+        for (;;) {
+          const nx = await it.next(); if (nx.done) break;
+          size += nx.value.length;
+          if (!streamed && size > LIST_RAW_MAX) {            // too big to keep in memory: compress on the fly instead
+            const o = { ...SEC, 'Content-Type': ct, 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' };
+            if (acceptsEnc(req, 'gzip')) { o['Content-Encoding'] = 'gzip'; streamed = zlib.createGzip({ level: 4 }); streamed.pipe(res); } else streamed = res;
+            res.writeHead(200, o); for (const c of chunks) streamed.write(c); chunks.length = 0;
+          }
+          if (streamed) { if (!streamed.write(nx.value)) await new Promise(rs => streamed.once('drain', rs)); } else chunks.push(nx.value);
+        }
+        if (streamed) { streamed.end(); return; }
+        const raw = Buffer.concat(chunks);
+        const gz = await new Promise(rs => zlib.gzip(raw, { level: 6 }, (e, b) => rs(e ? null : b)));
+        if (gz && raw.length > 2 && raw[0] === 0x5b) { const e = { ct: ct || 'application/json', gz, t: Date.now() }; listSet(target, e); return sendList(req, res, e); }
+        const o = { ...SEC, 'Content-Type': ct, 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' };
+        if (gz && acceptsEnc(req, 'gzip')) { o['Content-Encoding'] = 'gzip'; o['Content-Length'] = gz.length; res.writeHead(200, o); return res.end(gz); }
+        o['Content-Length'] = raw.length; res.writeHead(200, o); return res.end(raw);
+      }
       const looksPlaylist = /mpegurl/i.test(ct) || /\.m3u8?$/i.test(new URL(r.finalUrl).pathname);
       if (looksPlaylist) {
         // Peek at the first bytes: a real playlist starts with #EXTM3U. Some Xtream panels answer
@@ -521,9 +647,11 @@ const server = http.createServer(async (req, res) => {
           const chunks = [head]; let size = head.length;
           for (let n = await it.next(); !n.done; n = await it.next()) { size += n.value.length; if (size > MAX_PLAYLIST) { r.destroy(); return fail(res, 502, 'Playlist too large'); } chunks.push(n.value); }
           const text = Buffer.concat(chunks).toString('utf8');
-          const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl) : text;
-          res.writeHead(r.statusCode, { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
-          return res.end(body);
+          const body = text.includes('#EXT-X-') ? rewrite(text, r.finalUrl, meta.n ? '&n=' + encodeURIComponent(meta.n) + '&k=' + meta.k : '') : text;
+          let buf = Buffer.from(body); const hh = { ...SEC, 'Content-Type': ct || 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' };
+          if (buf.length > 1024 && acceptsEnc(req, 'gzip')) { const gz = await new Promise(rs => zlib.gzip(buf, { level: 5 }, (e, b) => rs(e ? null : b))); if (gz) { buf = gz; hh['Content-Encoding'] = 'gzip'; } }
+          hh['Content-Length'] = buf.length; res.writeHead(r.statusCode, hh);
+          return res.end(buf);
         }
         const o = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
         for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) o[k] = r.headers[k];
@@ -531,6 +659,10 @@ const server = http.createServer(async (req, res) => {
         res.write(head);
         r.on('error', () => res.end()); r.pipe(res);
         return;
+      }
+      if (r.statusCode === 200 && !r.headers['content-range'] && !r.headers['content-encoding'] && /^(application\/json|text\/|application\/(xml|x-mpegurl)|audio\/x-mpegurl)/i.test(ct) && acceptsEnc(req, 'gzip')) {
+        res.writeHead(200, { ...SEC, 'Content-Type': ct, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+        const gz = zlib.createGzip({ level: 4 }); r.on('error', () => gz.end()); r.pipe(gz).pipe(res); return;
       }
       const out = { ...SEC, 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store' };
       for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers[k]) out[k] = r.headers[k];
@@ -544,13 +676,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (u.pathname === '/app') {
-    try {
-      const html = fs.readFileSync(path.join(__dirname, 'iptv-player.html'), 'utf8').replace('<head>', '<head>\n<script>window.IPTV_PROXY=true</script>');
-      res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      return res.end(html);
-    } catch { return fail(res, 500, 'iptv-player.html not found'); }
+    try { return sendStatic(req, res, staticPage('iptv-player.html', h => h.replace('<head>', '<head>\n<script>window.IPTV_PROXY=true</script>')), 'text/html; charset=utf-8'); } catch { return fail(res, 500, 'iptv-player.html not found'); }
   }
   fail(res, 404, 'Not found');
-});
+}
 server.keepAliveTimeout = 65000; server.headersTimeout = 66000;
 server.listen(PORT, '0.0.0.0', () => console.log('IPTV Player listening on :' + PORT + (gateOn() ? ' (access codes: ' + STORE.members.length + ')' : PASS ? ' (password protected)' : ' (NO PASSWORD OR ACCESS CODES SET)')));
