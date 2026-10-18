@@ -62,6 +62,20 @@ pre.msg{white-space:pre-wrap;background:#0d1328;border:1px solid var(--line);bor
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--raise);border:1px solid var(--acc);border-radius:10px;padding:10px 16px;z-index:20;max-width:90vw}
 #toast.bad{border-color:var(--err)}
 .empty{padding:26px;text-align:center;color:var(--dim)}
+.tabs{display:flex;gap:6px;margin:0 0 14px}
+.tab{padding:8px 16px;border-radius:99px}.tab.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+#secI .card{margin-bottom:12px}#secI h3{margin:0 0 10px;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid2 .card{margin-bottom:0!important}
+.seg{display:inline-flex;gap:4px;margin-left:auto}.seg button{padding:4px 10px;font-size:12px;border-radius:99px}.seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.cost{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}.cost label{margin:0}.cost input{width:130px}
+.chart svg{display:block;width:100%;height:auto}.bar{fill:#5b4fd6}.bar.today{fill:var(--acc2)}.bar.peak{fill:var(--warn)}
+.gl{stroke:var(--line);stroke-width:1}.ax{fill:var(--dim);font-size:11px}
+.lrow{display:grid;grid-template-columns:1fr auto;gap:3px 12px;padding:7px 0;border-bottom:1px solid var(--line)}.lrow:last-child{border-bottom:0}
+.lrow .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lrow .v{color:var(--dim);font-size:13px;white-space:nowrap}
+.lrow .lb{grid-column:1/-1;height:5px;border-radius:4px;background:#5b4fd6;min-width:2px}
+.kind{font-size:11px;border:1px solid var(--line);border-radius:99px;padding:1px 7px;margin-right:6px;color:var(--dim)}
+.hint{color:var(--dim);font-size:13px;margin:8px 0 0}
+@media(max-width:860px){.grid2{grid-template-columns:1fr}}
 @media(max-width:860px){
  table,tbody,tr,td{display:block}thead{display:none}
  tr{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;padding:8px 4px;background:var(--panel)}
@@ -94,6 +108,10 @@ pre.msg{white-space:pre-wrap;background:#0d1328;border:1px solid var(--line);bor
 
   <div id="storebanner"></div>
 
+  <nav class="tabs" role="tablist" aria-label="Admin sections"><button id="tabM" class="tab on" role="tab" aria-selected="true">Members</button><button id="tabI" class="tab" role="tab" aria-selected="false">Insights</button></nav>
+
+  <div id="secM">
+
   <div class="tiles">
    <div class="tile"><b id="t1">0</b><span>Active members</span></div>
    <div class="tile"><b id="t2">0</b><span>Watching now</span></div>
@@ -113,6 +131,33 @@ pre.msg{white-space:pre-wrap;background:#0d1328;border:1px solid var(--line);bor
     <tbody id="rows"></tbody>
    </table>
    <div id="empty" class="empty" hidden></div>
+  </div>
+  </div>
+
+  <div id="secI" hidden>
+   <div class="tools">
+    <select id="irange" aria-label="Time range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="60">Last 60 days</option></select>
+    <span id="inote" class="dim" style="align-self:center"></span>
+   </div>
+   <div class="tiles">
+    <div class="tile"><b id="i1">0 MB</b><span>Data used today</span></div>
+    <div class="tile"><b id="i2">0 MB</b><span>Data used this month</span></div>
+    <div class="tile"><b id="i3">—</b><span>Projected for the month</span></div>
+    <div class="tile"><b id="i4">—</b><span id="i4s">Estimated extra cost</span></div>
+   </div>
+   <div class="card">
+    <div class="cost">
+     <div><label for="incl">Data included in your Render plan (GB per month)</label><input id="incl" type="number" min="0" step="1" placeholder="e.g. 100"></div>
+     <div><label for="price">Price per extra GB ($)</label><input id="price" type="number" min="0" step="0.01" value="0.15"></div>
+    </div>
+    <p class="hint">Check both numbers in Render. They are kept only in this browser, to estimate the cost. The data figures are measured by your server and may differ a little from Render's own count.</p>
+   </div>
+   <div class="card"><h3>Data per day</h3><div id="cDaily" class="chart"></div><p id="dNote" class="hint"></p></div>
+   <div class="card"><h3>Busiest hours (India time)</h3><div id="cHours" class="chart"></div><p id="hNote" class="hint"></p></div>
+   <div class="grid2">
+    <div class="card"><h3>Most watched <span class="seg"><button id="bMb" class="on">By data</button><button id="bViews">By views</button></span></h3><div id="lTitles"></div><p class="hint">Counts titles only. Nobody's personal watching history is kept.</p></div>
+    <div class="card"><h3>Top members by data</h3><div id="lMembers"></div><h3 style="margin-top:20px">Not seen for 14+ days</h3><div id="lInactive"></div></div>
+   </div>
   </div>
  </section>
 </main>
@@ -162,7 +207,7 @@ async function api(method,path,body){
  return j;
 }
 function toast(m,bad){const t=$('toast');t.textContent=m;t.className=bad?'bad':'';t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>t.hidden=true,3200)}
-function showLogin(){$('app').hidden=true;$('login').hidden=false;clearInterval(timer);$('pw').focus()}
+function showLogin(){$('app').hidden=true;$('login').hidden=false;clearInterval(timer);clearInterval(itimer);$('pw').focus()}
 function showApp(){$('login').hidden=true;$('app').hidden=false;clearInterval(timer);timer=setInterval(()=>{if(!$('dlg').open&&!$('mdlg').open)load()},15000)}
 
 $('lf').onsubmit=async e=>{e.preventDefault();$('lerr').textContent='';$('lbtn').disabled=true;
@@ -294,6 +339,76 @@ function openMsg(m){
 }
 $('mclose').onclick=()=>$('mdlg').close();
 $('mcopy').onclick=async()=>{await copy($('mtext').textContent);toast('Message copied')};
+
+
+/* ---------- Insights ---------- */
+let tab='m',itimer=null,INS=null,tmode='mb';
+const NS='http://www.w3.org/2000/svg';
+function svgEl(n,a,t){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!=null)e.textContent=t;return e}
+const fmt=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+' GB':Math.round(n)+' MB';
+function bars(host,vals,labels,tips,cls,label){
+ host.textContent='';const W=Math.max(300,host.clientWidth||760),H=200,L=52,B=26,T=10,R=6,max=Math.max(1,...vals);
+ const svg=svgEl('svg',{viewBox:'0 0 '+W+' '+H,role:'img','aria-label':label});
+ [0,.5,1].forEach(f=>{const y=T+(H-T-B)*(1-f);svg.appendChild(svgEl('line',{x1:L,x2:W-R,y1:y,y2:y,class:'gl'}));svg.appendChild(svgEl('text',{x:L-6,y:y+4,class:'ax','text-anchor':'end'},fmt(max*f)))});
+ const n=vals.length,bw=(W-L-R)/n;
+ vals.forEach((v,i)=>{const h=(H-T-B)*v/max,x=L+i*bw+bw*.15,y=H-B-h;
+  const r=svgEl('rect',{x:x,y:y,width:bw*.7,height:v>0?Math.max(1.5,h):0,rx:2,class:'bar '+(cls[i]||'')});r.appendChild(svgEl('title',{},tips[i]));svg.appendChild(r);
+  if(labels[i])svg.appendChild(svgEl('text',{x:x+bw*.35,y:H-8,class:'ax','text-anchor':'middle'},labels[i]))});
+ host.appendChild(svg);
+}
+function setTab(t){
+ tab=t;$('secM').hidden=t!=='m';$('secI').hidden=t!=='i';
+ for(const [id,k] of [['tabM','m'],['tabI','i']]){$(id).classList.toggle('on',t===k);$(id).setAttribute('aria-selected',t===k)}
+ clearInterval(itimer);if(t==='i'){loadIns();itimer=setInterval(loadIns,20000)}
+}
+$('tabM').onclick=()=>setTab('m');$('tabI').onclick=()=>setTab('i');$('irange').onchange=loadIns;
+async function loadIns(){try{INS=await api('GET','/admin/api/insights?days='+$('irange').value);renderIns()}catch(e){if(e.message!=='login')toast(e.message,true)}}
+function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+$('incl').value=lsGet('mmn_incl','');$('price').value=lsGet('mmn_price','0.15');
+$('incl').oninput=()=>{lsSet('mmn_incl',$('incl').value);renderCost()};$('price').oninput=()=>{lsSet('mmn_price',$('price').value);renderCost()};
+function renderCost(){
+ if(!INS)return;const t=INS.totals,incl=parseFloat($('incl').value),price=parseFloat($('price').value)||0;
+ if(isNaN(incl)){$('i4').textContent='—';$('i4s').textContent='Enter your included GB below';return}
+ const now=Math.max(0,t.month/1000-incl)*price,end=t.projected==null?null:Math.max(0,t.projected/1000-incl)*price;
+ $('i4').textContent='$'+now.toFixed(2);$('i4s').textContent=end==null?'Extra cost so far':'Extra cost so far · about $'+end.toFixed(2)+' by month end';
+}
+function renderIns(){
+ const d=INS;$('i1').textContent=fmt(d.totals.today);$('i2').textContent=fmt(d.totals.month);
+ $('i3').textContent=d.totals.projected==null?'—':fmt(d.totals.projected);renderCost();
+ $('inote').textContent=d.hourDays===0?'Hourly and per-title numbers start collecting now. Older days only have daily totals.':'';
+ // daily
+ const n=d.daily.length,step=Math.ceil(n/8);
+ bars($('cDaily'),d.daily.map(x=>x.mb),d.daily.map((x,i)=>((n-1-i)%step===0)?(+x.d.slice(8))+'/'+(+x.d.slice(5,7)):''),
+  d.daily.map(x=>x.d+': '+fmt(x.mb)+(x.peak?' · up to '+x.peak+' watching at once':'')),d.daily.map((x,i)=>i===n-1?'today':''),'Data used per day');
+ const bd=d.daily.reduce((a,x)=>x.mb>a.mb?x:a,d.daily[0]),pk=d.daily.reduce((a,x)=>x.peak>a.peak?x:a,d.daily[0]);
+ $('dNote').textContent=bd.mb>0?'Busiest day: '+bd.d+' ('+fmt(bd.mb)+').'+(pk.peak?' Most devices watching at once: '+pk.peak+' on '+pk.d+'.':''):'No data yet in this range.';
+ // hours
+ const mx=Math.max(...d.hourly),top=d.hourly.indexOf(mx);
+ bars($('cHours'),d.hourly,d.hourly.map((v,h)=>h%3===0?String(h):''),d.hourly.map((v,h)=>h+':00 to '+(h+1)+':00: '+fmt(v)),d.hourly.map((v,h)=>mx>0&&h===top?'peak':''),'Data used by hour of the day');
+ $('hNote').textContent=mx>0?'Busiest hour: '+top+':00 to '+(top+1)+':00 India time ('+fmt(mx)+' over '+d.hourDays+' day'+(d.hourDays>1?'s':'')+' of hourly data). Hours are 0 to 23.':'Hourly numbers start collecting now.';
+ // titles
+ const rows=(tmode==='mb'?d.topMb:d.topViews),host=$('lTitles');host.textContent='';
+ if(!rows.length){const e=document.createElement('p');e.className='hint';e.textContent='Nothing counted yet. It fills in as members watch.';host.appendChild(e)}
+ const mxv=Math.max(1,...rows.map(r=>tmode==='mb'?r.mb:r.views));
+ rows.forEach(r=>{const row=document.createElement('div'),t=document.createElement('div'),v=document.createElement('div'),b=document.createElement('div');
+  row.className='lrow';t.className='t';v.className='v';b.className='lb';
+  const k=document.createElement('span');k.className='kind';k.textContent=r.k==='live'?'Live':r.k==='movie'?'Movie':'Episode';t.append(k,document.createTextNode(r.name));t.title=r.name;
+  v.textContent=(tmode==='mb'?fmt(r.mb)+' · '+r.views+' view'+(r.views===1?'':'s'):r.views+' view'+(r.views===1?'':'s')+' · '+fmt(r.mb));
+  b.style.width=Math.max(1,100*(tmode==='mb'?r.mb:r.views)/mxv)+'%';row.append(t,v,b);host.appendChild(row)});
+ // members
+ const mh=$('lMembers');mh.textContent='';const mm=Math.max(1,...d.members.map(x=>x.mb));
+ if(!d.members.length){const e=document.createElement('p');e.className='hint';e.textContent='No data in this range.';mh.appendChild(e)}
+ d.members.forEach(m=>{const row=document.createElement('div'),t=document.createElement('div'),v=document.createElement('div'),b=document.createElement('div');row.className='lrow';t.className='t';v.className='v';b.className='lb';
+  t.textContent=m.name;v.textContent=fmt(m.mb);b.style.width=Math.max(1,100*m.mb/mm)+'%';row.append(t,v,b);mh.appendChild(row)});
+ const ih=$('lInactive');ih.textContent='';
+ if(!d.inactive.length){const e=document.createElement('p');e.className='hint';e.textContent='Everyone with active access has been seen in the last 14 days.';ih.appendChild(e)}
+ d.inactive.forEach(m=>{const row=document.createElement('div'),t=document.createElement('div'),v=document.createElement('div');row.className='lrow';t.className='t';v.className='v';
+  t.textContent=m.name;v.textContent=m.days==null?'never signed in':m.days+' days ago';row.append(t,v);ih.appendChild(row)});
+}
+let rz;addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if(tab==='i'&&INS)renderIns()},200)});
+$('bMb').onclick=()=>{tmode='mb';$('bMb').classList.add('on');$('bViews').classList.remove('on');if(INS)renderIns()};
+$('bViews').onclick=()=>{tmode='views';$('bViews').classList.add('on');$('bMb').classList.remove('on');if(INS)renderIns()};
 
 $('q').oninput=()=>render(Date.now());$('flt').onchange=()=>render(Date.now());
 load();
