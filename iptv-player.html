@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MMN</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -201,11 +203,17 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
  </form>
 </dialog>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
 <script>
 (function(){
 const $=id=>document.getElementById(id);
+
+/* video libraries are fetched only when a stream needs them (the page used to wait for both before showing anything) */
+const LIBS={hls:'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js',mpegts:'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js'},libP={};let modeTok=0;
+function ensureLib(k){
+ if((k==='hls'&&window.Hls)||(k==='mpegts'&&window.mpegts))return Promise.resolve();
+ return libP[k]||(libP[k]=new Promise((res,rej)=>{const s=document.createElement('script');s.src=LIBS[k];s.onload=res;s.onerror=()=>{delete libP[k];rej(new Error('load '+k))};document.head.appendChild(s)}));
+}
+function warmLibs(){if(warmLibs.done)return;warmLibs.done=1;const f=()=>ensureLib('mpegts').catch(()=>{});window.requestIdleCallback?requestIdleCallback(f,{timeout:5000}):setTimeout(f,3000)}
 const px=u=>window.IPTV_PROXY?location.origin+'/proxy?u='+encodeURIComponent(u):u; /* absolute URL: mpegts.js fetches inside a Worker, which cannot resolve relative URLs */
 const v=$('v'),st=$('status'),list=$('list');
 let lastErr='',acct=null,m3u=[],stack=[],mode='',curTab='live',gridMode=false,loadId=0,sess=null,channels=[],view=[],cur=-1,hls=null,mp=null,cush=0,TX=new Set(),limit=300,favs=new Set();
@@ -264,7 +272,7 @@ function setChannels(arr,tab){
  const gs=[...new Set(arr.map(c=>c.group))].sort();
  $('grp').innerHTML='<option value="">All groups</option><option value="__fav">★ Favorites</option>'+gs.map(g=>'<option>'+esc(g)+'</option>').join('');
  chips();$('whead').textContent='Pick a channel';$('wtext').textContent=arr.length+' channels ready. Choose one from the list.';$('wb').hidden=true;$('welcome').hidden=!!sess;
- render();status('');setTimeout(()=>{if(!/^Resumed/.test(st.textContent))status('')},2500);
+ render();status('');warmLibs();setTimeout(()=>{if(!/^Resumed/.test(st.textContent))status('')},2500);
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function loadText(t){
@@ -386,9 +394,26 @@ async function diagnose(orig){
   return 'The provider is sending valid data, but the browser could not play it'+(lastErr?' ('+lastErr+')':'')+'. It most likely uses a video or audio format browsers cannot decode (such as H.265/HEVC or AC3).'+tech;
  }catch(e){return 'Could not check the stream: '+e.message}
 }
+ function aheadOf(){const t=v.currentTime;try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)<=t+0.15&&b.end(i)>=t)return b.end(i)-t}catch(e){}return 0}
+function cushion(tgt){ /* live TS: wait until a few seconds are buffered so short hiccups are not visible */
+if(cush||!mp||!sess||sess.vod)return;
+const t0=Date.now();v.pause();status('Buffering…');
+cush=setInterval(()=>{
+ if(aheadOf()>=tgt||Date.now()-t0>10000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},250)}
+/* some providers restart the stream with a tiny hole in the timeline; the browser then sits at the hole. Jump over it. */
+let gapStuck=0,gapLastT=-1;
+setInterval(()=>{
+if(!mp||!sess||sess.vod||v.paused||v.seeking||cush){gapStuck=0;return}
+const t=v.currentTime;
+if(Math.abs(t-gapLastT)<0.01)gapStuck+=250;else{gapStuck=0;gapLastT=t}
+if(gapStuck>=600){try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)>t&&b.start(i)-t<5){dlog('skipped a '+(b.start(i)-t).toFixed(2)+'s gap');v.currentTime=b.start(i)+0.05;gapStuck=0;break}}catch(e){}}
+},250);
+const pm=u=>{const b=px(u);if(!window.IPTV_PROXY||!sess||!sess.meta)return b;const m=sess.meta,t=(m.series?m.series+' · ':'')+m.name;return b+'&n='+encodeURIComponent(t.slice(0,80))+'&k='+(sess.vod?(m.kind==='episode'?'episode':'movie'):'live')};
 function tryMode(orig,modes,k){
- const url=px(orig);
+ const url=pm(orig);
  teardown();
+ const tok=++modeTok;
+ const libThen=(n,fn)=>ensureLib(n).then(()=>{if(tok===modeTok)fn()}).catch(()=>{if(tok===modeTok){lastErr=(lastErr?lastErr+' | ':'')+'could not load the '+n+' library';next()}});
  if(k>=modes.length){
   if(window.IPTV_PROXY){status('Checking why this stream failed…');diagnose(orig).then(m=>{if(sess&&sess.orig===orig)status(m,'err')});}
   else{const mixed=location.protocol==='https:'&&orig.startsWith('http:');
@@ -400,25 +425,11 @@ function tryMode(orig,modes,k){
  if(sess){sess.k=k;sess.lastTs=Date.now()}
  status('Connecting…');
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
- function aheadOf(){const t=v.currentTime;try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)<=t+0.15&&b.end(i)>=t)return b.end(i)-t}catch(e){}return 0}
-function cushion(tgt){ /* live TS: wait until a few seconds are buffered so short hiccups are not visible */
- if(cush||!mp||!sess||sess.vod)return;
- const t0=Date.now();v.pause();status('Buffering…');
- cush=setInterval(()=>{
-  if(aheadOf()>=tgt||Date.now()-t0>10000||!mp||!sess){clearInterval(cush);cush=0;if(sess)sess.lastTs=Date.now();v.play().catch(()=>{})}},250)}
-/* some providers restart the stream with a tiny hole in the timeline; the browser then sits at the hole. Jump over it. */
-let gapStuck=0,gapLastT=-1;
-setInterval(()=>{
- if(!mp||!sess||sess.vod||v.paused||v.seeking||cush){gapStuck=0;return}
- const t=v.currentTime;
- if(Math.abs(t-gapLastT)<0.01)gapStuck+=250;else{gapStuck=0;gapLastT=t}
- if(gapStuck>=600){try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)>t&&b.start(i)-t<5){dlog('skipped a '+(b.start(i)-t).toFixed(2)+'s gap');v.currentTime=b.start(i)+0.05;gapStuck=0;break}}catch(e){}}
-},250);
 v.onplaying=()=>{if(!/^Resumed/.test(st.textContent))status('');if(sess)sess.started=true;onStarted();v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion(8)}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{dlog('waiting for data');status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion(4)};
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
  if(m==='hls'||m==='hlsalt'){
-  const hurl=m==='hlsalt'?px(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
-  if(window.Hls&&Hls.isSupported()){
+  const hurl=m==='hlsalt'?pm(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
+  libThen('hls',()=>{if(window.Hls&&Hls.isSupported()){
    hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:30,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:1,manifestLoadingTimeOut:8000,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
    const h=hls;
    hls.loadSource(hurl);hls.attachMedia(v);
@@ -431,12 +442,12 @@ v.onplaying=()=>{if(!/^Resumed/.test(st.textContent))status('');if(sess)sess.sta
    });
    hls.on(Hls.Events.FRAG_LOADED,()=>{h._retry=0});
    h._retry=0;h._media=0;
-  }else next();
+  }else next()});
  }else if(m==='native'){
   if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.onerror=bad;go()}else next();
  }else if(m==='ts'||m==='flv'||m==='tsalt'||m==='tstx'){
-  const turl=m==='tsalt'?px(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):m==='tstx'?px(/\.m3u8(\?.*)?$/i.test(orig)?orig.replace(/\.m3u8(\?.*)?$/i,'.ts'):orig)+'&tx=1':url;
-  if(window.mpegts&&mpegts.isSupported()){
+  const turl=m==='tsalt'?pm(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):m==='tstx'?pm(/\.m3u8(\?.*)?$/i.test(orig)?orig.replace(/\.m3u8(\?.*)?$/i,'.ts'):orig)+'&tx=1':url;
+  libThen('mpegts',()=>{if(window.mpegts&&mpegts.isSupported()){
    mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
    {const E=mpegts.Events;mp.on(E.STATISTICS_INFO,s=>{dspeed=Math.round(s.speed||0)});E.LOADING_COMPLETE&&mp.on(E.LOADING_COMPLETE,()=>dlog('server closed the stream'));E.RECOVERED_EARLY_EOF&&mp.on(E.RECOVERED_EARLY_EOF,()=>dlog('connection dropped, recovered'))}
@@ -444,7 +455,7 @@ v.onplaying=()=>{if(!/^Resumed/.test(st.textContent))status('');if(sess)sess.sta
     if(m!=='tstx'&&window.IPTV_PROXY&&/ac-3|ec-3|addSourceBuffer|codecs=/i.test(e)&&sess&&!modes.includes('tstx')){TX.add(orig);modes.splice(k+1,0,'tstx');dlog('audio not supported by browser - converting on server')}
     bad()});
    go();
-  }else next();
+  }else next()});
  }else{
   v.src=url;v.onerror=bad;go();
  }
