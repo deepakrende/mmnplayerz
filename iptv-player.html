@@ -32,12 +32,20 @@ button.big{padding:.8rem 1.2rem;font-weight:600}
 .src input{flex:1;min-width:0;background:none;border:0;outline:0;padding:.4rem 1rem}
 .src button{border:0;border-radius:999px}
 .tools{display:flex;gap:.5rem;align-items:center}
-#acc{font-size:.8rem;color:var(--dim);white-space:nowrap}#acc a{color:var(--acc2);margin-left:.35rem}#acc.soon #accT{color:var(--err)}
-@media(max-width:700px){#accT{display:none}}
+#acc{font-size:.8rem;color:var(--dim);white-space:nowrap}#acc a{color:var(--acc2);margin-left:.35rem}#acc.soon #accT{color:var(--err)}#accT{color:var(--dim);margin-left:0!important}#meM{display:none}
+@media(max-width:700px){#accT{display:none}#meM{display:inline}}
 main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(21rem,29vw,30rem);gap:1.25rem;padding:1.25rem}
 .stage{display:flex;flex-direction:column;gap:1rem;min-width:0;min-height:0}
 #vwrap{position:relative;aspect-ratio:16/9;width:min(100%,calc((100dvh - 11.5rem)*16/9));margin:0 auto;background:#000;border-radius:1.25rem;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
 video{display:block;width:100%;height:100%;background:#000}
+.rp{display:none;font-weight:700;font-size:.78rem;letter-spacing:.2px}body.pl #rw,body.pl #ff{display:grid}body.lv #rw30,body.lv #golive{display:grid}
+#golive{color:var(--live)}#golive.on{background:var(--live);color:#fff;border-color:var(--live)}
+#hand{display:none}body.pl #hand{display:grid}#hqr svg{display:block;width:100%;height:auto;border-radius:.6rem}#vwrap{touch-action:pan-y}#vwrap:fullscreen,#vwrap:-webkit-full-screen{touch-action:none}
+#live.late{background:#3a4170;cursor:pointer}#live{cursor:default}
+#tsbar{position:absolute;z-index:3;left:.9rem;right:.9rem;bottom:3.4rem;display:flex;align-items:center;gap:.6rem;transition:opacity .25s}
+#tsbar[hidden]{display:none}#vwrap:not(.act):not(.paused) #tsbar{opacity:0;pointer-events:none}
+#tsr{flex:1;accent-color:var(--live);height:1.4rem;margin:0}#tsl{font:700 .75rem/1 var(--fd);background:#000a;color:#fff;padding:.3rem .5rem;border-radius:.4rem;min-width:3.2rem;text-align:center}
+#gtoast{position:absolute;z-index:4;left:50%;top:42%;transform:translate(-50%,-50%);background:#000b;color:#fff;font:700 1rem/1.2 var(--fd);padding:.7rem 1.1rem;border-radius:.8rem;pointer-events:none;max-width:80%;text-align:center}
 #live{position:absolute;z-index:2;top:.9rem;left:.9rem;background:var(--live);color:#fff;font:700 .8rem/1 var(--fd);padding:.4rem .65rem;border-radius:.5rem}
 #status{position:absolute;z-index:3;top:.9rem;left:50%;transform:translateX(-50%);max-width:calc(100% - 7rem);background:rgba(11,16,32,.9);border:1px solid var(--line);padding:.45rem 1rem;border-radius:999px;font-size:.9rem;pointer-events:none;display:none}
 #status.busy::before{content:"";display:inline-block;width:.8em;height:.8em;margin-right:.6em;border:2px solid var(--acc2);border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-.1em}
@@ -116,7 +124,7 @@ dialog textarea{width:100%;height:14rem;font:.85rem ui-monospace,Menlo,monospace
  main{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:.75rem;padding:.75rem}
  #vwrap,.now{width:100%}#vwrap{border-radius:1rem}
  #nlogo{width:2.6rem;height:2.6rem}.meta h2{font-size:1.15rem}
- .ctl .ib:nth-child(3){display:none}
+ .ctl #pip{display:none}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-controls-time-remaining-display{display:none}
@@ -133,7 +141,7 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
  <div class="tools">
   <button class="ib" id="file" title="Open playlist file" aria-label="Open playlist file"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
   <button class="ib" id="paste" title="Paste M3U text" aria-label="Paste M3U text"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/></svg></button>
-  <span id="acc" hidden><span id="accT"></span> <a href="/logout">Sign out</a></span>
+  <span id="acc" hidden><a id="accT" href="/me" title="My access: devices, data used, sign in a TV"></a> <a id="meM" href="/me">My access</a> <a href="/logout">Sign out</a></span>
   <button id="xt">Xtream login</button>
  </div>
  <input id="fi" type="file" accept=".m3u,.m3u8,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl" hidden>
@@ -143,6 +151,8 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
   <div id="vwrap">
    <video id="v" controls autoplay playsinline webkit-playsinline x-webkit-airplay="allow"></video>
    <span id="live" hidden>● Live</span>
+   <div id="tsbar" hidden><input id="tsr" type="range" min="0" max="1000" step="1" value="1000" aria-label="Replay position"><span id="tsl"></span></div>
+   <div id="gtoast" role="status" aria-live="polite" hidden></div>
    <pre id="dbg" hidden></pre>
    <div id="welcome">
     <div class="wc">
@@ -162,10 +172,15 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
    <span class="lg" id="nlogo" data-ini="▶"></span>
    <div class="meta"><h2 id="title">Nothing playing</h2><p id="sub">Choose a channel to start</p></div>
    <div class="ctl">
+    <button class="ib rp" id="rw30" title="Back 30 seconds" aria-label="Back 30 seconds"><span>↺30</span></button>
+    <button class="ib rp" id="rw" title="Back 10 seconds (← or J)" aria-label="Back 10 seconds"><span>↺10</span></button>
+    <button class="ib rp" id="ff" title="Forward 10 seconds (→ or L)" aria-label="Forward 10 seconds"><span>10↻</span></button>
+    <button class="ib rp" id="golive" title="Back to live (End)" aria-label="Back to live"><span>LIVE</span></button>
     <button class="ib" id="prev" title="Previous channel (↑)" aria-label="Previous channel"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 20 9 12l10-8zM5 4v16"/></svg></button>
     <button class="ib" id="next" title="Next channel (↓)" aria-label="Next channel"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 4 10 8-10 8zM19 4v16"/></svg></button>
     <button class="ib" id="pip" title="Picture in picture (P)" aria-label="Picture in picture"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="6" height="4" rx="1"/></svg></button>
     <button class="ib" id="fs" title="Fullscreen (F)" aria-label="Fullscreen"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button class="ib" id="hand" title="Continue on another device" aria-label="Continue on another device"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="10" rx="2"/><path d="M8 19h2M6 15v4"/><rect x="17" y="9" width="5" height="11" rx="1.5"/></svg></button>
     <button class="ib" id="vlc" title="Copy a link to open this channel in VLC" aria-label="Copy VLC link"><span style="font-weight:700;font-size:.8rem;letter-spacing:.3px">VLC</span></button>
    </div>
   </div>
@@ -201,6 +216,15 @@ video.islive::-webkit-media-controls-timeline,video.islive::-webkit-media-contro
   <div id="xmsg"></div>
   <div class="acts"><button type="button" id="xout" title="Remove the saved login from this device">Forget login</button><button value="x">Close</button><button type="button" class="pri" id="xgo">Connect</button></div>
  </form>
+</dialog>
+
+<dialog id="hdlg">
+ <h3>Continue on another device</h3>
+ <p class="dim" style="margin:0 0 .6rem">Scan this with your phone or TV, or open the link there. That device must be signed in with your access code. It keeps your place and works for 15 minutes.</p>
+ <div id="hqr" style="width:min(240px,66vw);margin:.4rem auto"></div>
+ <label class="fld">Link<input id="hlink" readonly></label>
+ <div id="hmsg" role="status" style="min-height:1.2rem;font-size:.85rem;color:var(--err)"></div>
+ <div class="acts"><button type="button" class="pri" id="hcopy">Copy link</button><button type="button" id="hclose">Close</button></div>
 </dialog>
 
 <script>
@@ -303,11 +327,46 @@ $('paste').onclick=()=>$('dlg').showModal();
 $('ok').onclick=()=>{loadText($('ta').value)};
 
 /* ---------- Channel list ---------- */
+
+/* ---------- search that forgives spelling mistakes ---------- */
+function fzFold(s){
+ s=String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ s=s.replace(/ph/g,'f').replace(/ck/g,'k').replace(/q/g,'k').replace(/x/g,'ks').replace(/w/g,'v').replace(/kh/g,'k').replace(/gh/g,'g').replace(/bh/g,'b').replace(/dh/g,'d')
+  .replace(/sh/g,'s').replace(/ch/g,'c').replace(/th/g,'t').replace(/ee|ii|ea/g,'i').replace(/oo|uu|ou/g,'u').replace(/aa/g,'a');
+ return s.replace(/([a-z])\1+/g,'$1');
+}
+function fzPrep(name){const lc=String(name).toLowerCase(),toks=fzFold(name).split(' ').filter(Boolean),comp=toks.join(''),sk=comp.replace(/[aeiou]/g,'');return{lc,toks,comp,sk:sk.length>=3?sk:''}}
+function lev(a,b,max){
+ const n=a.length,m=b.length;if(Math.abs(n-m)>max)return max+1;
+ let prev=new Array(m+1),cur=new Array(m+1);for(let j=0;j<=m;j++)prev[j]=j;
+ for(let i=1;i<=n;i++){cur[0]=i;let rowMin=cur[0];for(let j=1;j<=m;j++){const c=a.charCodeAt(i-1)===b.charCodeAt(j-1)?0:1;cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+c);if(cur[j]<rowMin)rowMin=cur[j]}if(rowMin>max)return max+1;const t=prev;prev=cur;cur=t}
+ return prev[m];
+}
+function fzTok(t,n){
+ if(n.startsWith(t))return 60;
+ if(t.length>=3&&n.includes(t))return 50;
+ const allow=t.length>=8?2:t.length>=4?1:0;if(!allow||n.length<3||n.charCodeAt(0)!==t.charCodeAt(0))return 0;   /* a typo rarely changes the first letter; this skips most words cheaply */
+ const d=Math.min(lev(t,n,allow),lev(t,n.slice(0,t.length+1),allow));
+ return d<=allow?55-d*5:0;
+}
+function fzQuery(q){const lc=q.toLowerCase().trim(),toks=fzFold(q).split(' ').filter(Boolean),comp=toks.join(''),sk=comp.replace(/[aeiou]/g,'');return{lc,toks,comp,sk:sk.length>=3?sk:'',fuzzy:lc.length>=3}}
+function fzScore(c,q){
+ const f=c._f||(c._f=fzPrep(c.name));
+ if(f.lc.includes(q.lc))return(f.lc.startsWith(q.lc)||f.lc.includes(' '+q.lc))?100:92;
+ if(!q.fuzzy)return 0;
+ if(q.comp.length>=3&&f.comp.includes(q.comp))return 80;
+ if(q.toks.length){let tot=0,ok=true;for(const t of q.toks){let best=0;for(const n of f.toks){const s=fzTok(t,n);if(s>best){best=s;if(best>=60)break}}if(!best){ok=false;break}tot+=best}if(ok)return Math.round(tot/q.toks.length)}
+ if(q.sk.length>=3&&f.sk.includes(q.sk))return 35;
+ return 0;
+}
 function render(){
- const q=$('q').value.toLowerCase(),g=$('grp').value;
- view=channels.map((c,i)=>({c,i})).filter(x=>(!q||x.c.name.toLowerCase().includes(q))&&(!g||(g==='__fav'?favs.has(x.c.url):x.c.group===g)));
+ const qraw=$('q').value.trim(),g=$('grp').value;let fzNote='';
+ const inG=c=>!g||(g==='__fav'?favs.has(c.url):c.group===g);
+ if(qraw){const qi=fzQuery(qraw),sc=[];for(let i=0;i<channels.length;i++){const c=channels[i];if(!inG(c))continue;const s=fzScore(c,qi);if(s>0)sc.push({c,i,s})}
+  sc.sort((a,b)=>b.s-a.s||a.i-b.i);view=sc;if(sc.length&&sc[0].s<80)fzNote=' (closest matches)'}
+ else view=channels.map((c,i)=>({c,i})).filter(x=>inG(x.c));
  $('empty').style.display=channels.length?'none':'block';
- $('count').textContent=channels.length?(view.length===channels.length?channels.length+' channels':view.length+' of '+channels.length):'';
+ $('count').textContent=channels.length?(view.length===channels.length&&!fzNote?channels.length+' channels':view.length+' of '+channels.length+fzNote):'';
  let html=view.slice(0,limit).map(({c,i})=>{
   const f=favs.has(c.url),ini=esc((c.name.match(/[A-Za-z0-9]/)||['•'])[0].toUpperCase());
   const img=c.logo?'<img loading="lazy" referrerpolicy="no-referrer" alt="" src="'+esc(c.logo)+'" onload="this.classList.add(\'ok\')" onerror="this.remove()">':'';
@@ -375,7 +434,7 @@ function playUrl(url,name,vod,meta){
  $('title').textContent=name;$('sub').textContent='Direct stream';$('nlogo').innerHTML='';$('nlogo').dataset.ini='▶';$('live').hidden=true;$('welcome').hidden=true;document.title=name+' · MMN';
  const modes=guess(url);if(TX.has(url)&&!modes.includes('tstx'))modes.unshift('tstx');
  lastErr='';clearInterval(cush);cush=0;v.classList.remove('islive');sess={orig:url,modes,k:0,started:false,fails:0,lastTs:Date.now(),lastT:-1,vod:!!vod,meta:meta||null,resumeAt:0,resumed:false,logged:false,guard:0};
- if(meta&&vod){const h=histGet(url);if(h&&!h.done&&h.t>=15&&h.d-h.t>=30)sess.resumeAt=h.t}
+ if(meta&&vod){const h=histGet(url);if(h&&!h.done&&h.t>=15&&h.d-h.t>=30)sess.resumeAt=h.t;if(meta.pos>=5)sess.resumeAt=meta.pos}
  tryMode(url,modes,0);
 }
 async function diagnose(orig){
@@ -408,6 +467,131 @@ const t=v.currentTime;
 if(Math.abs(t-gapLastT)<0.01)gapStuck+=250;else{gapStuck=0;gapLastT=t}
 if(gapStuck>=600){try{const b=v.buffered;for(let i=0;i<b.length;i++)if(b.start(i)>t&&b.start(i)-t<5){dlog('skipped a '+(b.start(i)-t).toFixed(2)+'s gap');v.currentTime=b.start(i)+0.05;gapStuck=0;break}}catch(e){}}
 },250);
+
+/* ---------- live TV: pause, replay and "back to live" ---------- */
+const MEM=navigator.deviceMemory||4;                                   /* GB of memory (Chrome reports it; others get 4) */
+const TS_BACK=MEM>=8?180:MEM>=4?120:75;                                /* seconds of video kept behind the live picture */
+const TS_BUDGET=(MEM>=8?260:MEM>=4?150:80)*1048576;                    /* bytes the live buffer may use */
+const LIVE_NEAR=15;                                                    /* within this many seconds of the newest video counts as "live" */
+let tsRate=0,userPaused=false,scrubbing=false,toastT=0;
+const isLiveNow=()=>!!(sess&&!sess.vod&&sess.started&&(mp||hls));
+function bufInfo(){const b=v.buffered;if(!b||!b.length)return null;return{start:b.start(0),end:b.end(b.length-1),t:v.currentTime}}
+function behind(){const i=bufInfo();return i?Math.max(0,i.end-i.t):0}
+function pauseLimit(){if(window.__TS_PAUSE_LIMIT)return window.__TS_PAUSE_LIMIT;return Math.max(20,Math.min(600,Math.round(TS_BUDGET/Math.max(tsRate,150000)-TS_BACK)))}
+function gtoast(t,ms){const e=$('gtoast');e.textContent=t;e.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{e.hidden=true},ms||1400)}
+function fmtS(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function seekBy(d){
+ if(!sess||!sess.started)return;const i=bufInfo();if(!i)return;
+ if(isLiveNow()){
+  if(d>0&&i.t+d>=i.end-4){goLive();return}
+  const tg=i.t+d;if(tg<i.start){v.currentTime=i.start+.2;gtoast('Only '+fmtS(i.t-i.start)+' of replay available');return}
+  v.currentTime=Math.max(i.start+.2,tg);gtoast((d<0?'↺ ':'')+Math.abs(d)+'s'+(d>0?' ↻':''));
+ }else{const dur=isFinite(v.duration)?v.duration:i.end;v.currentTime=Math.max(0,Math.min(dur-1,i.t+d));gtoast((d<0?'↺ ':'')+Math.abs(d)+'s'+(d>0?' ↻':''))}
+ if(v.paused&&!cush)v.play().catch(()=>{});
+}
+function goLive(){const i=bufInfo();if(!i)return;v.currentTime=Math.max(i.start,i.end-8);if(v.paused)v.play().catch(()=>{});gtoast('Back to live')}
+$('rw').onclick=()=>seekBy(-10);$('rw30').onclick=()=>seekBy(-30);$('ff').onclick=()=>seekBy(10);$('golive').onclick=goLive;$('live').onclick=()=>{if($('live').classList.contains('late'))goLive()};
+v.addEventListener('pause',()=>{userPaused=!cush&&!v.ended&&!!sess&&sess.started;$('vwrap').classList.add('paused')});
+v.addEventListener('play',()=>{userPaused=false;$('vwrap').classList.remove('paused');if(sess)sess.lastTs=Date.now()});   /* a long pause must not look like a stalled stream */
+const tsr=$('tsr');
+tsr.addEventListener('pointerdown',()=>{scrubbing=true});addEventListener('pointerup',()=>{scrubbing=false});
+tsr.addEventListener('input',()=>{const i=bufInfo();if(!i)return;v.currentTime=i.start+(i.end-i.start)*(+tsr.value)/1000});
+setInterval(()=>{
+ const live=isLiveNow(),playing=!!(sess&&sess.started);
+ document.body.classList.toggle('pl',playing);document.body.classList.toggle('lv',live);
+ const i=live?bufInfo():null,bh=i?i.end-i.t:0;
+ const bar=$('tsbar'),span=i?i.end-i.start:0;
+ bar.hidden=!(live&&span>12);
+ if(!bar.hidden){if(!scrubbing)tsr.value=Math.round(1000*(i.t-i.start)/span);$('tsl').textContent=bh>LIVE_NEAR?'-'+fmtS(bh):'LIVE'}
+ const lv=$('live');
+ if(live){lv.hidden=false;const late=bh>LIVE_NEAR;lv.classList.toggle('late',late);lv.textContent=late?'⏸ Behind live '+fmtS(bh)+' · tap to go live':'● Live';$('golive').classList.toggle('on',!late)}
+ if(live&&v.paused&&userPaused&&!cush&&bh>pauseLimit()){v.play().catch(()=>{});gtoast('Live pause limit reached. Playing again.',2600)}
+},500);
+
+/* ---------- continue on another device ---------- */
+const HT=(location.pathname.match(/^\/h\/([A-Za-z0-9_-]{6,40})$/)||[])[1]||'';
+let handDone=false;
+function ensureQr(){return window.qrSvg?Promise.resolve():new Promise((res,rej)=>{const s=document.createElement('script');s.src='/qr.js';s.onload=res;s.onerror=()=>rej(new Error('qr'));document.head.appendChild(s)})}
+function handoffBody(){
+ if(!sess||!sess.orig)return null;
+ const m=/\/(live|movie|series)\/[^/]+\/[^/]+\/([^/.?]+)\.([A-Za-z0-9]+)(?:\?.*)?$/.exec(sess.orig);if(!m)return null;
+ const meta=sess.meta||{};
+ return{kind:m[1]==='live'?'live':m[1]==='movie'?'movie':'episode',id:m[2],ext:m[3].toLowerCase(),name:meta.name||'',series:meta.series||'',pos:sess.vod?Math.floor(v.currentTime):0};
+}
+$('hand').onclick=async()=>{
+ const body=handoffBody();
+ if(!body||!window.IPTV_PROXY){gtoast('Continue on another device works with Xtream logins',2600);return}
+ $('hmsg').textContent='';$('hqr').textContent='';$('hlink').value='';
+ try{$('hdlg').showModal()}catch(e){}
+ try{
+  const r=await fetch('/me/api/handoff',{method:'POST',headers:{'Content-Type':'application/json','X-Me':'1'},body:JSON.stringify(body)});const j=await r.json();
+  if(r.status===401){location.href='/gate?next=/app';return}
+  if(!r.ok)throw new Error(j.error||'Could not make the link');
+  const url=location.origin+j.path;$('hlink').value=url;await ensureQr();$('hqr').innerHTML=window.qrSvg(url,{label:'QR code to continue on another device'});
+ }catch(e){$('hmsg').textContent=e.message||'Could not make the link'}
+};
+$('hclose').onclick=()=>$('hdlg').close();
+$('hcopy').onclick=async()=>{const t=$('hlink').value;if(!t)return;try{await navigator.clipboard.writeText(t);$('hmsg').style.color='var(--ok)';$('hmsg').textContent='Link copied'}catch(e){$('hlink').select();$('hmsg').textContent='Press Ctrl+C to copy'}};
+async function runHandoff(){
+ if(!HT||handDone||!acct)return;handDone=true;
+ try{
+  const r=await fetch('/me/api/handoff/'+HT,{headers:{'X-Me':'1'},cache:'no-store'}),j=await r.json();
+  if(!r.ok){status(j.error||'This link no longer works.');setTimeout(()=>status(''),7000);history.replaceState(null,'','/app');return}
+  const seg=j.kind==='live'?'live':j.kind==='movie'?'movie':'series';
+  const url=acct.base+'/'+seg+'/'+acct.eu+'/'+acct.ep+'/'+j.id+'.'+j.ext;
+  const meta={name:j.name||('Title '+j.id),kind:j.kind==='live'?'live':j.kind==='movie'?'vod':'episode',series:j.series||'',url,group:'',pos:j.pos||0};
+  history.replaceState(null,'','/app');
+  playUrl(url,(j.series?j.series+' · ':'')+meta.name,j.kind!=='live',meta);
+ }catch(e){status('Could not open the link.');setTimeout(()=>status(''),5000)}
+}
+if(HT){let s=null;try{s=JSON.parse(localStorage.getItem('iptv_xt')||'null')}catch(e){}
+ if(!s||!s.s){status('To continue, sign in to your IPTV account on this device.');try{$('xdlg').showModal()}catch(e){}}}
+
+/* ---------- touch gestures (phones and tablets) ---------- */
+(function(){
+ if(!(matchMedia('(pointer:coarse)').matches||'ontouchstart' in window))return;
+ const w=$('vwrap');let st=null,last={t:0,x:0,y:0},hold=0,rate0=1;
+ const inFs=()=>!!(document.fullscreenElement||document.webkitFullscreenElement)||!!window.__GEST_FS;
+ const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+ w.addEventListener('pointerdown',e=>{
+  if(e.pointerType!=='touch'||!sess||!sess.started||e.target.closest('#tsbar,#live,.ctl'))return;
+  const r=w.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+  if(y>r.height-64||y<40){st=null;return}                                        /* leave the browser's own control bar alone */
+  st={id:e.pointerId,x0:e.clientX,y0:e.clientY,t0:Date.now(),W:r.width,H:r.height,x,mode:'',dx:0,dy:0,vol0:v.volume};
+  clearTimeout(hold);if(sess.vod)hold=setTimeout(()=>{if(st&&!st.mode){rate0=v.playbackRate;v.playbackRate=2;st.mode='speed';gtoast('2× speed',900)}},500);
+ },{passive:true});
+ w.addEventListener('pointermove',e=>{
+  if(!st||e.pointerId!==st.id)return;
+  const dx=e.clientX-st.x0,dy=e.clientY-st.y0;st.dx=dx;st.dy=dy;
+  if(!st.mode){
+   if(Math.abs(dx)>14&&Math.abs(dx)>Math.abs(dy)*1.5){st.mode='h';clearTimeout(hold)}
+   else if(inFs()&&Math.abs(dy)>14&&Math.abs(dy)>Math.abs(dx)*1.5){st.mode='v';clearTimeout(hold)}
+  }
+  if(st.mode==='h'&&sess.vod){const d=Math.round(dx/st.W*120);gtoast((d>=0?'+':'-')+fmtS(Math.abs(d)),500)}
+  if(st.mode==='v'){v.muted=false;v.volume=clamp(st.vol0-dy/st.H*1.3,0,1);gtoast('Volume '+Math.round(v.volume*100)+'%',500)}
+ },{passive:true});
+ const end=e=>{
+  if(!st||e.pointerId!==st.id)return;clearTimeout(hold);const s=st;st=null;
+  if(e.type==='pointercancel'){if(s.mode==='speed')v.playbackRate=rate0;return}
+  if(s.mode==='speed'){v.playbackRate=rate0;return}
+  if(s.mode==='h'){
+   if(sess.vod){const d=Math.round(s.dx/s.W*120);if(Math.abs(d)>=3)seekBy(d)}
+   else if(Math.abs(s.dx)>=90&&Math.abs(s.dy)<80){step(s.dx<0?1:-1);setTimeout(()=>gtoast($('title').textContent,1400),150)}
+   return;
+  }
+  if(s.mode==='v')return;
+  if(Date.now()-s.t0<300&&Math.abs(s.dx)<10&&Math.abs(s.dy)<10){                  /* a tap: two quick taps = skip or play/pause */
+   const now=Date.now();
+   if(now-last.t<320&&Math.abs(e.clientX-last.x)<70){
+    last.t=0;const f=s.x/s.W,t0=v.currentTime,p0=v.paused;
+    setTimeout(()=>{if(Math.abs(v.currentTime-t0)>4||v.paused!==p0)return;      /* Chrome's own double-tap already did it: do not do it twice */
+     if(f<.33)seekBy(-10);else if(f>.67)seekBy(10);else{v.paused?v.play().catch(()=>{}):v.pause()}},130);
+   }else last={t:now,x:e.clientX,y:e.clientY};
+  }
+ };
+ w.addEventListener('pointerup',end,{passive:true});w.addEventListener('pointercancel',end,{passive:true});
+ v.addEventListener('playing',()=>{try{if(!localStorage.getItem('mmn_tip')){localStorage.setItem('mmn_tip','1');gtoast('Tip: swipe left or right to change channel. Double-tap the sides to skip 10 s.',4200)}}catch(e){}},{once:true});
+})();
 const pm=u=>{const b=px(u);if(!window.IPTV_PROXY||!sess||!sess.meta)return b;const m=sess.meta,t=(m.series?m.series+' · ':'')+m.name;return b+'&n='+encodeURIComponent(t.slice(0,80))+'&k='+(sess.vod?(m.kind==='episode'?'episode':'movie'):'live')};
 function tryMode(orig,modes,k){
  const url=pm(orig);
@@ -425,12 +609,13 @@ function tryMode(orig,modes,k){
  if(sess){sess.k=k;sess.lastTs=Date.now()}
  status('Connecting…');
  const go=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{})};
+(function(){const w=$('vwrap');let t=0;const act=()=>{w.classList.add('act');clearTimeout(t);t=setTimeout(()=>w.classList.remove('act'),3000)};['pointermove','pointerdown','touchstart','keydown'].forEach(ev=>w.addEventListener(ev,act,{passive:true}))})();
 v.onplaying=()=>{if(!/^Resumed/.test(st.textContent))status('');if(sess)sess.started=true;onStarted();v.classList.toggle('islive',!!(mp&&sess&&!sess.vod));if(mp&&sess&&!sess.vod&&!sess.cushioned){sess.cushioned=true;cushion(8)}$('live').hidden=!(!isFinite(v.duration)||mp)};v.onwaiting=()=>{dlog('waiting for data');status('Buffering…');if(mp&&sess&&!sess.vod&&sess.started)cushion(4)};
  v.ontimeupdate=()=>{if(sess&&v.currentTime!==sess.lastT){sess.lastT=v.currentTime;sess.lastTs=Date.now();sess.fails=0}};
  if(m==='hls'||m==='hlsalt'){
   const hurl=m==='hlsalt'?pm(orig.replace(/\.ts(\?.*)?$/i,'.m3u8')):url;
   libThen('hls',()=>{if(window.Hls&&Hls.isSupported()){
-   hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:30,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:1,manifestLoadingTimeOut:8000,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
+   hls=new Hls({lowLatencyMode:false,liveSyncDurationCount:4,liveMaxLatencyDurationCount:12,maxBufferLength:40,maxMaxBufferLength:90,backBufferLength:TS_BACK,maxBufferHole:0.5,nudgeMaxRetry:8,manifestLoadingMaxRetry:1,manifestLoadingTimeOut:8000,levelLoadingMaxRetry:8,fragLoadingMaxRetry:8,fragLoadingRetryDelay:800,enableWorker:true});
    const h=hls;
    hls.loadSource(hurl);hls.attachMedia(v);
    hls.on(Hls.Events.MANIFEST_PARSED,go);
@@ -448,9 +633,9 @@ v.onplaying=()=>{if(!/^Resumed/.test(st.textContent))status('');if(sess)sess.sta
  }else if(m==='ts'||m==='flv'||m==='tsalt'||m==='tstx'){
   const turl=m==='tsalt'?pm(orig.replace(/\.m3u8(\?.*)?$/i,'.ts')):m==='tstx'?pm(/\.m3u8(\?.*)?$/i.test(orig)?orig.replace(/\.m3u8(\?.*)?$/i,'.ts'):orig)+'&tx=1':url;
   libThen('mpegts',()=>{if(window.mpegts&&mpegts.isSupported()){
-   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:40,autoCleanupMinBackwardDuration:20,reuseRedirectedURL:true});
+   mp=mpegts.createPlayer({type:m==='flv'?'flv':'mpegts',isLive:true,url:turl},{enableWorker:true,enableStashBuffer:true,stashInitialSize:393216,liveBufferLatencyChasing:false,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:TS_BACK+20,autoCleanupMinBackwardDuration:TS_BACK,reuseRedirectedURL:true});
    mp.attachMediaElement(v);mp.load();
-   {const E=mpegts.Events;mp.on(E.STATISTICS_INFO,s=>{dspeed=Math.round(s.speed||0)});E.LOADING_COMPLETE&&mp.on(E.LOADING_COMPLETE,()=>dlog('server closed the stream'));E.RECOVERED_EARLY_EOF&&mp.on(E.RECOVERED_EARLY_EOF,()=>dlog('connection dropped, recovered'))}
+   {const E=mpegts.Events;mp.on(E.STATISTICS_INFO,s=>{dspeed=Math.round(s.speed||0);if(s.speed>20)tsRate=tsRate?tsRate*.9+s.speed*1024*.1:s.speed*1024});E.LOADING_COMPLETE&&mp.on(E.LOADING_COMPLETE,()=>dlog('server closed the stream'));E.RECOVERED_EARLY_EOF&&mp.on(E.RECOVERED_EARLY_EOF,()=>dlog('connection dropped, recovered'))}
    mp.on(mpegts.Events.ERROR,(t,d,i)=>{const e='ts '+t+'/'+d+(i&&i.msg?' - '+i.msg:'');console.warn('[mpegts]',t,d,i);lastErr=(lastErr?lastErr+' | ':'')+e;
     if(m!=='tstx'&&window.IPTV_PROXY&&/ac-3|ec-3|addSourceBuffer|codecs=/i.test(e)&&sess&&!modes.includes('tstx')){TX.add(orig);modes.splice(k+1,0,'tstx');dlog('audio not supported by browser - converting on server')}
     bad()});
@@ -533,6 +718,9 @@ document.addEventListener('keydown',e=>{
  else if(k==='f'||k==='F')$('fs').click();
  else if(k==='m'||k==='M')v.muted=!v.muted;
  else if(k==='0'&&sess&&sess.vod){v.currentTime=0}
+ else if(k==='ArrowLeft'||k==='j'||k==='J'){e.preventDefault();seekBy(-10)}
+ else if(k==='ArrowRight'||k==='l'||k==='L'){e.preventDefault();seekBy(10)}
+ else if(k==='End'&&isLiveNow()){e.preventDefault();goLive()}
  else if(k==='p'||k==='P')$('pip').click();
  else if(k===' '){e.preventDefault();v.paused?v.play():v.pause()}
 });
@@ -638,7 +826,7 @@ $('xgo').onclick=async()=>{
   acct={base:s,eu,ep,fmt,api,cache:{},user:ui};m3u=[];
   $('xdlg').close();
   const exp=ui.exp_date?new Date(ui.exp_date*1000).toLocaleDateString():'no expiry';
-  showSection('live').then(()=>{});
+  showSection('live').then(()=>{runHandoff()});
   setTimeout(()=>{if(acct&&acct.user===ui&&!$('status').textContent)status('Signed in · '+ui.status+' · expires '+exp);setTimeout(()=>status(''),3500)},600);
  }catch(e){
   const net=e instanceof TypeError;
