@@ -185,7 +185,8 @@ const clean = m => ({
   id: m.id || newId(), name: String(m.name || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 60), code: String(m.code || '').toUpperCase().replace(/[^A-Z0-9-]/g, ''),
   expires: m.expires == null || Number.isNaN(+m.expires) ? null : +m.expires, paused: !!m.paused,
   devices: +m.devices > 0 ? Math.floor(+m.devices) : DEFAULT_DEVICES, screens: +m.screens > 0 ? Math.floor(+m.screens) : 1,
-  note: String(m.note || '').slice(0, 200), epoch: +m.epoch || 0, createdAt: +m.createdAt || Date.now(), lastSeenAt: +m.lastSeenAt || 0
+  note: String(m.note || '').slice(0, 200), epoch: +m.epoch || 0, createdAt: +m.createdAt || Date.now(), lastSeenAt: +m.lastSeenAt || 0,
+  revoked: Array.isArray(m.revoked) ? m.revoked.filter(x => /^[a-f0-9]{16}$/.test(x)).slice(-100) : []
 });
 function parseCodes(raw) {                      // optional first import from ACCESS_CODES: name:code:expiry[:devices[:screens]] (use | to give a time)
   const list = [];
@@ -289,7 +290,33 @@ function verify(tok) {
 const cookieOf = (req, name) => { for (const p of (req.headers.cookie || '').split(';')) { const i = p.indexOf('='); if (i > 0 && p.slice(0, i).trim() === name) return decodeURIComponent(p.slice(i + 1).trim()); } return ''; };
 const isHttps = req => req.headers['x-forwarded-proto'] === 'https' || !!req.socket.encrypted;
 const setCookie = (req, name, val, maxAgeSec, p = '/', strict = false) => name + '=' + encodeURIComponent(val) + '; Path=' + p + '; HttpOnly; SameSite=' + (strict ? 'Strict' : 'Lax') + '; Max-Age=' + maxAgeSec + (isHttps(req) ? '; Secure' : '');
-function pruneDevices(devs) { const cut = Date.now() - 14 * 86400000; for (const [d, t] of devs) if (t < cut) devs.delete(d); }
+const DEVMETA = new Map();   // deviceId -> { label, first }
+function deviceLabel(ua) {
+  ua = String(ua || '');
+  const os = /Windows/i.test(ua) ? 'Windows' : /Android/i.test(ua) ? 'Android' : /iPhone|iPad|iPod/i.test(ua) ? 'iPhone or iPad' : /CrOS/i.test(ua) ? 'Chromebook' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /Linux|X11/i.test(ua) ? 'Linux' : '';
+  const tv = /SmartTV|SMART-TV|Tizen|Web0S|WebOS|HbbTV|BRAVIA|AFTT|Android TV|GoogleTV|CrKey|AppleTV/i.test(ua);
+  const br = /Edg\//i.test(ua) ? 'Edge' : /OPR\/|Opera/i.test(ua) ? 'Opera' : /Firefox\//i.test(ua) ? 'Firefox' : /SamsungBrowser/i.test(ua) ? 'Samsung Internet' : /Chrome\//i.test(ua) ? 'Chrome' : /Safari\//i.test(ua) ? 'Safari' : 'Browser';
+  return tv ? 'TV browser' + (os ? ' (' + os + ')' : '') : br + (os ? ' on ' + os : '');
+}
+function noteDevice(req, id) { if (!DEVMETA.has(id)) DEVMETA.set(id, { label: deviceLabel(req.headers['user-agent']), first: Date.now() }); }
+function killDevice(fp, dev) { const set = OPEN.get(fp); if (set) for (const r of [...set]) if (r._dev === dev) { try { r.destroy(); } catch {} } }
+const SAFE_NEXT = /^\/(app|me(\?pair=[A-Z2-9]{6})?|h\/[A-Za-z0-9_-]{6,40})$/;
+const safeNext = p => SAFE_NEXT.test(String(p || '')) ? String(p) : '';
+const gateUrl = (path, err) => '/gate?' + (err && err !== 'login' ? 'why=' + err + '&' : '') + 'next=' + encodeURIComponent(safeNext(path) || '/app');
+function startSession(req, found) {      // gives this browser (or a paired TV) a device slot and a session cookie
+  let devs = DEVICES.get(found.fp); if (!devs) DEVICES.set(found.fp, devs = new Map());
+  pruneDevices(devs);
+  const old = verify(cookieOf(req, 'mmn_session'));
+  let device = old && old.f === found.fp && (old.e | 0) === (found.epoch | 0) && devs.has(old.d) && !(found.revoked || []).includes(old.d) ? old.d : null;   // same browser signing in again keeps its slot
+  if (!device) {
+    if (devs.size >= found.devices) return { error: 'This code is already signed in on ' + found.devices + ' device' + (found.devices > 1 ? 's' : '') + '. Remove one in My access, or ask the owner to reset it.' };
+    device = crypto.randomBytes(8).toString('hex');
+  }
+  devs.set(device, Date.now()); noteDevice(req, device);
+  const ttl = Math.max(60, Math.min(30 * 86400, Math.floor((expOf(found) - Date.now()) / 1000)));
+  return { device, count: devs.size, cookie: setCookie(req, 'mmn_session', sign({ f: found.fp, d: device, e: found.epoch | 0 }), ttl) };
+}
+function pruneDevices(devs) { const cut = Date.now() - 14 * 86400000; for (const [d, t] of devs) if (t < cut) { devs.delete(d); DEVMETA.delete(d); } }
 
 /* returns { entry, device } for a signed-in member, or { error } */
 function memberOf(req) {
@@ -300,13 +327,14 @@ function memberOf(req) {
   if (e.paused) return { error: 'paused', entry: e };
   if (Date.now() > expOf(e)) return { error: 'expired', entry: e };
   if ((p.e | 0) !== (e.epoch | 0)) return { error: 'signedout', entry: e };
+  if (e.revoked && e.revoked.includes(p.d)) return { error: 'signedout', entry: e };
   let devs = DEVICES.get(e.fp); if (!devs) DEVICES.set(e.fp, devs = new Map());
   if (!devs.has(p.d)) { pruneDevices(devs); if (devs.size >= e.devices) return { error: 'devices', entry: e }; }
-  devs.set(p.d, Date.now());
+  devs.set(p.d, Date.now()); noteDevice(req, p.d);
   { const t = Date.now(); if (!e.lastSeenAt || t - e.lastSeenAt > 300000) { e.lastSeenAt = t; usageDirty = true; } }
   return { entry: e, device: p.d };
 }
-function streamInc(w, res) { let m = STREAMS.get(w.entry.fp); if (!m) STREAMS.set(w.entry.fp, m = new Map()); m.set(w.device, (m.get(w.device) || 0) + 1); let o = OPEN.get(w.entry.fp); if (!o) OPEN.set(w.entry.fp, o = new Set()); o.add(res);
+function streamInc(w, res) { let m = STREAMS.get(w.entry.fp); if (!m) STREAMS.set(w.entry.fp, m = new Map()); m.set(w.device, (m.get(w.device) || 0) + 1); let o = OPEN.get(w.entry.fp); if (!o) OPEN.set(w.entry.fp, o = new Set()); o.add(res); res._dev = w.device;
   let n = 0; for (const mm of STREAMS.values()) for (const c of mm.values()) if (c > 0) n++;
   const d = istDay(); if (n > (STORE.peak[d] || 0)) { STORE.peak[d] = n; usageDirty = true; } }
 function streamDec(w, res) { const m = STREAMS.get(w.entry.fp); if (m) { const n = (m.get(w.device) || 1) - 1; n ? m.set(w.device, n) : m.delete(w.device); } const o = OPEN.get(w.entry.fp); if (o) { o.delete(res); if (!o.size) OPEN.delete(w.entry.fp); } }
@@ -319,24 +347,92 @@ const WHY = {
   signedout: 'You were signed out. Enter your code to continue.',
   devices: 'This code is already signed in on the maximum number of devices.'
 };
-function gatePage(why) {
-  const note = WHY[why] || '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MMN · Access</title>
+const GATE_HTML = String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MMN · Access</title>
 <style>:root{--bg:#0d0f1f;--panel:#161938;--line:#2a2e5c;--text:#eef0ff;--mute:#9aa0d0;--accent:#8b7bff;--err:#ff7a8a}*{box-sizing:border-box}html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:grid;place-items:center;padding:24px}
 main{width:100%;max-width:420px}.logo{display:flex;align-items:center;gap:12px;margin-bottom:26px}.logo i{width:40px;height:40px;border-radius:12px;background:var(--accent);display:grid;place-items:center}
 .logo i:after{content:"";border-left:13px solid #fff;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px}.logo b{font-size:28px}
 h1{font-size:22px;margin:0 0 6px}p{color:var(--mute);margin:0 0 18px}input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:600 18px ui-monospace,Consolas,monospace;letter-spacing:2px;text-transform:uppercase}
-input:focus{outline:2px solid var(--accent);outline-offset:2px}button{margin-top:12px;width:100%;padding:14px;border:0;border-radius:12px;background:var(--accent);color:#fff;font:600 16px inherit;cursor:pointer}button:disabled{opacity:.6;cursor:default}
-#msg{min-height:1.5em;margin-top:14px;color:var(--err);font-size:14px}small{display:block;margin-top:22px;color:var(--mute)}</style></head><body><main>
+input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button{margin-top:12px;width:100%;padding:14px;border:0;border-radius:12px;background:var(--accent);color:#fff;font:600 16px inherit;cursor:pointer}button:disabled{opacity:.6;cursor:default}
+button.alt{background:transparent;border:1px solid var(--line);color:var(--text);padding:12px;font-size:15px}
+#msg{min-height:1.5em;margin-top:14px;color:var(--err);font-size:14px}small{display:block;margin-top:22px;color:var(--mute)}
+#pair{margin-top:16px;border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--panel);text-align:center}#pair p{margin:0;font-size:14px}
+#pcode{font:700 42px ui-monospace,Consolas,monospace;letter-spacing:6px;margin:8px 0}#pqr{width:190px;max-width:65%;margin:8px auto 4px}#pqr svg{display:block;width:100%;height:auto;border-radius:8px}</style></head><body><main>
 <div class="logo"><i></i><b>MMN</b></div><h1>Enter your access code</h1><p>Access is by invitation. Ask the person who invited you for a code.</p>
 <form id="f"><input id="c" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="40" placeholder="XXXX-XXXX-XXXX" aria-label="Access code" autofocus><button id="b" type="submit">Continue</button></form>
-<div id="msg" role="alert">${note}</div><small>Your code is private. Do not share it.</small></main>
-<script>const f=document.getElementById('f'),c=document.getElementById('c'),b=document.getElementById('b'),m=document.getElementById('msg');
-f.onsubmit=async e=>{e.preventDefault();if(!c.value.trim())return;b.disabled=true;m.textContent='';
-try{const r=await fetch('/gate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c.value})});const j=await r.json().catch(()=>({}));
-if(r.ok){location.href='/app';return}m.textContent=j.error||'Could not check the code. Try again.'}catch(x){m.textContent='Could not reach the server. Try again.'}b.disabled=false};</script></body></html>`;
-}
+<button id="pbtn" class="alt" type="button">Use my phone to sign in (for TVs)</button>
+<div id="pair" hidden><p>On your phone, scan this code, or open <b id="phost"></b> and type the code:</p><div id="pcode" aria-live="polite">---</div><div id="pqr"></div><p id="pstate" role="status">Getting a code...</p><button id="pagain" class="alt" type="button" hidden>Get a new code</button></div>
+<div id="msg" role="alert">__NOTE__</div><small>Your code is private. Do not share it.</small></main>
+<script>(function(){var NEXT=__NEXT__;
+var f=document.getElementById('f'),c=document.getElementById('c'),b=document.getElementById('b'),m=document.getElementById('msg');
+f.onsubmit=function(e){e.preventDefault();if(!c.value.trim())return;b.disabled=true;m.textContent='';
+fetch('/gate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c.value,next:NEXT})}).then(function(r){return r.json().catch(function(){return{}}).then(function(j){
+if(r.ok){location.href=j.next||NEXT||'/app';return}m.textContent=j.error||'Could not check the code. Try again.';b.disabled=false})}).catch(function(){m.textContent='Could not reach the server. Try again.';b.disabled=false})};
+var pid=null,timer=null,$=function(i){return document.getElementById(i)};
+function stop(){clearInterval(timer);timer=null}
+function showQr(url){var q=$('pqr');function put(){try{q.innerHTML=window.qrSvg(url)}catch(e){q.textContent=''}}
+if(window.qrSvg)put();else{var s=document.createElement('script');s.src='/qr.js';s.onload=put;document.head.appendChild(s)}}
+function poll(){fetch('/pair/poll?id='+encodeURIComponent(pid),{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+if(j.state==='ok'){stop();$('pstate').textContent='Signed in. Opening...';location.href='/app'}
+else if(j.state==='expired'){stop();$('pstate').textContent='This code expired.';$('pagain').hidden=false}
+else if(j.state==='devices'){stop();$('pstate').textContent=j.error;$('pagain').hidden=false}}).catch(function(){})}
+function start(){stop();$('pagain').hidden=true;$('pstate').textContent='Getting a code...';
+fetch('/pair/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(o){
+if(!o.ok){$('pstate').textContent=o.j.error||'Could not start.';$('pagain').hidden=false;return}
+pid=o.j.id;$('pcode').textContent=o.j.code.slice(0,3)+'-'+o.j.code.slice(3);$('phost').textContent=location.host+'/me';showQr(location.origin+'/me?pair='+o.j.code);
+$('pstate').textContent='Waiting for your phone...';timer=setInterval(poll,2000)}).catch(function(){$('pstate').textContent='Could not reach the server.';$('pagain').hidden=false})}
+$('pbtn').onclick=function(){$('pair').hidden=false;$('pbtn').hidden=true;start()};$('pagain').onclick=start;
+})();</script></body></html>`;
+const ME_HTML = String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>MMN · My access</title>
+<style>:root{--bg:#0d0f1f;--panel:#161938;--raise:#1f2450;--line:#2a2e5c;--text:#eef0ff;--mute:#9aa0d0;--accent:#8b7bff;--ok:#5fd6a0;--warn:#ffb86b;--err:#ff7a8a}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px;padding-top:max(20px,env(safe-area-inset-top))}
+main{max-width:720px;margin:0 auto}.top{display:flex;align-items:center;gap:12px;margin-bottom:18px}.logo{display:flex;align-items:center;gap:10px;margin-right:auto}.logo i{width:34px;height:34px;border-radius:10px;background:var(--accent);display:grid;place-items:center}
+.logo i:after{content:"";border-left:11px solid #fff;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:3px}.logo b{font-size:20px}
+a.btn,button{background:var(--raise);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font:inherit;text-decoration:none;cursor:pointer}a.btn:hover,button:hover{border-color:var(--accent)}button.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}button.sm{padding:5px 10px;font-size:14px}button.danger{color:var(--err)}
+h1{font-size:24px;margin:0 0 14px}h2{font-size:16px;margin:0 0 6px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}.small{color:var(--mute);font-size:14px;margin:0 0 10px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.tile b{display:block;font-size:22px;line-height:1.25}.tile span{color:var(--mute);font-size:13px}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:0}.row .t{flex:1;min-width:0}.row .t div:last-child{color:var(--mute);font-size:13px}
+.tag{font-size:12px;border:1px solid #235c3b;color:var(--ok);border-radius:99px;padding:1px 8px;margin-left:6px}input{width:100%;max-width:220px;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0d1328;color:var(--text);font:600 18px ui-monospace,Consolas,monospace;letter-spacing:3px;text-transform:uppercase}
+input:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#perr,#pok{min-height:1.4em;font-size:14px;margin-top:8px}#perr{color:var(--err)}#pok{color:var(--ok)}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--raise);border:1px solid var(--accent);border-radius:10px;padding:10px 16px;max-width:90vw}[hidden]{display:none!important}</style></head><body><main>
+<div class="top"><div class="logo"><i></i><b>MMN</b></div><a class="btn" href="/app">Back to player</a></div>
+<h1 id="hello">My access</h1>
+<div class="tiles"><div class="tile"><b id="t1">-</b><span>Access</span></div><div class="tile"><b id="t2">-</b><span>Data used today</span></div><div class="tile"><b id="t3">-</b><span>Data used this month</span></div></div>
+<div class="card"><h2>My devices <span id="dcount" class="small"></span></h2><p class="small">Remove a device you no longer use to free its place. It is signed out straight away.</p><div id="devs"></div></div>
+<div class="card"><h2>Sign in a TV</h2><p class="small">On the TV, open this site and choose "Use my phone to sign in". Then type the code shown on the TV here, or scan the TV's QR code.</p>
+<input id="pc" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC-123" aria-label="Code shown on the TV"> <button id="pcheck" class="pri">Check</button>
+<div id="pconf" hidden class="card" style="margin:12px 0 0;background:#10143a"><div id="pwho"></div><p class="small" style="margin:8px 0">Only approve if you are looking at this code on your own TV right now.</p><button id="pyes" class="pri">Approve</button> <button id="pno">Cancel</button></div>
+<div id="perr" role="alert"></div><div id="pok" role="status"></div></div>
+<div id="toast" role="status" hidden></div></main>
+<script>(function(){var $=function(i){return document.getElementById(i)},cur=null;
+function api(m,p,b){return fetch(p,{method:m,headers:{'Content-Type':'application/json','X-Me':'1'},body:b?JSON.stringify(b):undefined,cache:'no-store'}).then(function(r){return r.json().catch(function(){return{}}).then(function(j){
+if(r.status===401){location.href='/gate?next=/me';throw new Error('login')}if(!r.ok)throw new Error(j.error||('Error '+r.status));return j})})}
+function toast(t){var e=$('toast');e.textContent=t;e.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(function(){e.hidden=true},2800)}
+function mb(n){return n>=1000?(n/1000).toFixed(1)+' GB':Math.round(n)+' MB'}
+function ago(t,now){var s=Math.max(0,Math.round((now-t)/1000));if(s<90)return'just now';if(s<5400)return Math.round(s/60)+' min ago';if(s<172800)return Math.round(s/3600)+' h ago';return Math.round(s/86400)+' days ago'}
+function load(){api('GET','/me/api').then(function(d){
+$('hello').textContent='Hi '+d.name;
+var left=d.expires==null?null:Math.ceil((d.expires-d.now)/86400000);
+$('t1').textContent=d.expires==null?'No end date':(left>90?'Until '+new Date(d.expires).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):left>1?left+' days left':left===1?'1 day left':'Ends today');
+$('t2').textContent=mb(d.usage.today);$('t3').textContent=mb(d.usage.month);
+$('dcount').textContent=d.devices.length+' of '+d.limit+' used';
+var h=$('devs');h.textContent='';
+if(!d.devices.length){var e=document.createElement('p');e.className='small';e.textContent='No devices yet.';h.appendChild(e)}
+d.devices.forEach(function(x){var row=document.createElement('div'),t=document.createElement('div'),a=document.createElement('div'),b=document.createElement('div'),bt=document.createElement('button');
+row.className='row';t.className='t';a.textContent=x.label;if(x.current){var g=document.createElement('span');g.className='tag';g.textContent='This device';a.appendChild(g)}
+b.textContent='Last used '+ago(x.last,d.now);t.append(a,b);bt.className='sm danger';bt.textContent=x.current?'Sign out':'Remove';
+bt.onclick=function(){if(!confirm(x.current?'Sign out of this device?':'Remove '+x.label+'? It is signed out straight away.'))return;
+api('POST','/me/api/device/remove',{id:x.id}).then(function(r){if(r.self){location.href='/gate';return}toast('Device removed');load()}).catch(function(er){if(er.message!=='login')toast(er.message)})};
+row.append(t,bt);h.appendChild(row)})}).catch(function(e){if(e.message!=='login')toast(e.message)})}
+function check(){$('perr').textContent='';$('pok').textContent='';$('pconf').hidden=true;var c=$('pc').value.trim();if(!c)return;
+api('POST','/me/api/pair/lookup',{code:c}).then(function(r){cur=c;$('pwho').textContent=r.label+' is asking to sign in to your access.';$('pconf').hidden=false}).catch(function(e){if(e.message!=='login')$('perr').textContent=e.message})}
+$('pcheck').onclick=check;$('pc').onkeydown=function(e){if(e.key==='Enter')check()};
+$('pno').onclick=function(){$('pconf').hidden=true;cur=null};
+$('pyes').onclick=function(){api('POST','/me/api/pair/approve',{code:cur}).then(function(){$('pconf').hidden=true;$('pc').value='';$('pok').textContent='Approved. Your TV will sign in in a few seconds.';load()}).catch(function(e){if(e.message!=='login'){$('perr').textContent=e.message;$('pconf').hidden=true}})};
+var q=new URLSearchParams(location.search).get('pair');if(q){$('pc').value=q;history.replaceState(null,'','/me');check()}
+load();})();</script></body></html>`;
+const QR_JS = "/* Tiny QR code generator (byte mode, error correction M, versions 1-10). window.qrSvg(text) returns an SVG string. */\n(function (root) {\n  'use strict';\n  var EXP = new Uint8Array(512), LOG = new Uint8Array(256);\n  for (var i = 0, x = 1; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11d; }\n  for (i = 255; i < 512; i++) EXP[i] = EXP[i - 255];\n  function mul(a, b) { return a && b ? EXP[LOG[a] + LOG[b]] : 0; }\n  function rsGen(n) { var g = [1]; for (var i = 0; i < n; i++) { var ng = new Array(g.length + 1).fill(0); for (var j = 0; j < g.length; j++) { ng[j] ^= g[j]; ng[j + 1] ^= mul(g[j], EXP[i]); } g = ng; } return g; }\n  function rsEnc(data, n) { var g = rsGen(n), res = new Array(n).fill(0); for (var k = 0; k < data.length; k++) { var f = data[k] ^ res.shift(); res.push(0); if (f) for (var i = 0; i < n; i++) res[i] ^= mul(g[i + 1], f); } return res; }\n  var VER = { 1: [10, [[1, 16]]], 2: [16, [[1, 28]]], 3: [26, [[1, 44]]], 4: [18, [[2, 32]]], 5: [24, [[2, 43]]], 6: [16, [[4, 27]]], 7: [18, [[4, 31]]], 8: [22, [[2, 38], [2, 39]]], 9: [22, [[3, 36], [2, 37]]], 10: [26, [[4, 43], [1, 44]]] };\n  var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };\n  function dataCw(v) { return VER[v][1].reduce(function (a, b) { return a + b[0] * b[1]; }, 0); }\n  function utf8(s) { if (typeof TextEncoder !== 'undefined') return Array.prototype.slice.call(new TextEncoder().encode(s)); var e = unescape(encodeURIComponent(s)), o = []; for (var i = 0; i < e.length; i++) o.push(e.charCodeAt(i)); return o; }\n  function bit(n, i) { return ((n >>> i) & 1) !== 0; }\n  function matrix(text, forceMask) {\n    var bytes = utf8(String(text)), v = 0;\n    for (var t = 1; t <= 10; t++) { if (4 + (t < 10 ? 8 : 16) + 8 * bytes.length <= dataCw(t) * 8) { v = t; break; } }\n    if (!v) throw new Error('Text is too long for the QR code');\n    var bits = [];\n    function put(val, len) { for (var i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); }\n    put(4, 4); put(bytes.length, v < 10 ? 8 : 16); bytes.forEach(function (b) { put(b, 8); });\n    var cap = dataCw(v) * 8; put(0, Math.min(4, cap - bits.length)); while (bits.length % 8) bits.push(0);\n    var cw = []; for (var i = 0; i < bits.length; i += 8) { var b = 0; for (var j = 0; j < 8; j++) b = (b << 1) | bits[i + j]; cw.push(b); }\n    for (var pad = 0xec; cw.length < dataCw(v); pad ^= 0xec ^ 0x11) cw.push(pad);\n    var ecLen = VER[v][0], blocks = [], pos = 0;\n    VER[v][1].forEach(function (g) { for (var c = 0; c < g[0]; c++) { var d = cw.slice(pos, pos + g[1]); pos += g[1]; blocks.push({ d: d, e: rsEnc(d, ecLen) }); } });\n    var all = [], maxD = Math.max.apply(null, blocks.map(function (b) { return b.d.length; }));\n    for (i = 0; i < maxD; i++) blocks.forEach(function (b) { if (i < b.d.length) all.push(b.d[i]); });\n    for (i = 0; i < ecLen; i++) blocks.forEach(function (b) { all.push(b.e[i]); });\n    var size = 17 + 4 * v, M = [], F = [];\n    for (i = 0; i < size; i++) { M.push(new Array(size).fill(false)); F.push(new Array(size).fill(false)); }\n    function setF(x, y, dark) { M[y][x] = dark; F[y][x] = true; }\n    for (i = 0; i < size; i++) { setF(6, i, i % 2 === 0); setF(i, 6, i % 2 === 0); }\n    function finder(cx, cy) { for (var dy = -4; dy <= 4; dy++) for (var dx = -4; dx <= 4; dx++) { var d = Math.max(Math.abs(dx), Math.abs(dy)), xx = cx + dx, yy = cy + dy; if (xx >= 0 && xx < size && yy >= 0 && yy < size) setF(xx, yy, d !== 2 && d !== 4); } }\n    finder(3, 3); finder(size - 4, 3); finder(3, size - 4);\n    var al = ALIGN[v], last = al.length - 1;\n    al.forEach(function (ax, ai) { al.forEach(function (ay, aj) { if ((ai === 0 && aj === 0) || (ai === 0 && aj === last) || (ai === last && aj === 0)) return; for (var dy = -2; dy <= 2; dy++) for (var dx = -2; dx <= 2; dx++) setF(ax + dx, ay + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1); }); });\n    function formatBits(mask) { var data = (0 << 3) | mask, rem = data; for (var i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537); return ((data << 10) | rem) ^ 0x5412; }\n    function drawFormat(mask) {\n      var b = formatBits(mask), i;\n      for (i = 0; i <= 5; i++) setF(8, i, bit(b, i)); setF(8, 7, bit(b, 6)); setF(8, 8, bit(b, 7)); setF(7, 8, bit(b, 8));\n      for (i = 9; i < 15; i++) setF(14 - i, 8, bit(b, i));\n      for (i = 0; i < 8; i++) setF(size - 1 - i, 8, bit(b, i));\n      for (i = 8; i < 15; i++) setF(8, size - 15 + i, bit(b, i));\n      setF(8, size - 8, true);\n    }\n    drawFormat(0);\n    if (v >= 7) { var rem = v; for (i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25); var vb = (v << 12) | rem; for (i = 0; i < 18; i++) { var a = size - 11 + (i % 3), bb = Math.floor(i / 3), db = bit(vb, i); setF(a, bb, db); setF(bb, a, db); } }\n    var k = 0;\n    for (var right = size - 1; right >= 1; right -= 2) {\n      if (right === 6) right = 5;\n      for (var vert = 0; vert < size; vert++) for (var jj = 0; jj < 2; jj++) {\n        var xx = right - jj, up = ((right + 1) & 2) === 0, yy = up ? size - 1 - vert : vert;\n        if (!F[yy][xx] && k < all.length * 8) { M[yy][xx] = bit(all[k >>> 3], 7 - (k & 7)); k++; }\n      }\n    }\n    function applyMask(mask) {\n      for (var y = 0; y < size; y++) for (var x = 0; x < size; x++) {\n        var inv; switch (mask) { case 0: inv = (x + y) % 2 === 0; break; case 1: inv = y % 2 === 0; break; case 2: inv = x % 3 === 0; break; case 3: inv = (x + y) % 3 === 0; break;\n          case 4: inv = (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0; break; case 5: inv = x * y % 2 + x * y % 3 === 0; break; case 6: inv = (x * y % 2 + x * y % 3) % 2 === 0; break; default: inv = ((x + y) % 2 + x * y % 3) % 2 === 0; }\n        if (!F[y][x] && inv) M[y][x] = !M[y][x];\n      }\n    }\n    function penalty() {\n      var p = 0, y, x, run, i;\n      function lines(get) { for (var a = 0; a < size; a++) { run = 1; for (var b = 1; b < size; b++) { if (get(a, b) === get(a, b - 1)) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else run = 1; } } }\n      lines(function (a, b) { return M[a][b]; }); lines(function (a, b) { return M[b][a]; });\n      for (y = 0; y < size - 1; y++) for (x = 0; x < size - 1; x++) { var c = M[y][x]; if (c === M[y][x + 1] && c === M[y + 1][x] && c === M[y + 1][x + 1]) p += 3; }\n      var pat1 = '10111010000', pat2 = '00001011101';\n      for (var a = 0; a < size; a++) { var r = '', cc = ''; for (var b = 0; b < size; b++) { r += M[a][b] ? '1' : '0'; cc += M[b][a] ? '1' : '0'; }\n        [r, cc].forEach(function (s) { for (i = 0; i + 11 <= s.length; i++) { var sub = s.substr(i, 11); if (sub === pat1 || sub === pat2) p += 40; } }); }\n      var dark = 0; for (y = 0; y < size; y++) for (x = 0; x < size; x++) if (M[y][x]) dark++;\n      var tot = size * size, kk = Math.ceil(Math.abs(dark * 20 - tot * 10) / tot) - 1; if (kk > 0) p += kk * 10;\n      return p;\n    }\n    var best = forceMask, bestP = Infinity;\n    if (best === undefined) { for (var m = 0; m < 8; m++) { applyMask(m); drawFormat(m); var pp = penalty(); if (pp < bestP) { bestP = pp; best = m; } applyMask(m); } }\n    applyMask(best); drawFormat(best);\n    return { size: size, version: v, mask: best, get: function (x, y) { return M[y][x]; } };\n  }\n  function svg(text, opt) {\n    opt = opt || {}; var q = matrix(text), m = opt.margin == null ? 4 : opt.margin, n = q.size + 2 * m, d = '';\n    for (var y = 0; y < q.size; y++) { var x = 0; while (x < q.size) { if (q.get(x, y)) { var s = x; while (x < q.size && q.get(x, y)) x++; d += 'M' + (s + m) + ' ' + (y + m) + 'h' + (x - s) + 'v1h-' + (x - s) + 'z'; } else x++; } }\n    return '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ' + n + ' ' + n + '\" shape-rendering=\"crispEdges\" role=\"img\" aria-label=\"' + (opt.label || 'QR code') + '\"><rect width=\"' + n + '\" height=\"' + n + '\" fill=\"#fff\"/><path d=\"' + d + '\" fill=\"#000\"/></svg>';\n  }\n  root.qrSvg = svg; root.qrMatrix = matrix;\n})(typeof window !== 'undefined' ? window : globalThis);\n";
+function gatePage(why, next) { return GATE_HTML.replace('__NOTE__', WHY[why] || '').replace('__NEXT__', JSON.stringify(safeNext(next))); }
 function readBody(req, max = 8192) {
   return new Promise((resolve, reject) => {
     let n = 0; const ch = [];
@@ -393,34 +489,114 @@ function sendList(req, res, e) {
 async function handleGate(req, res, u) {
   if (!gateOn()) { res.writeHead(302, { Location: '/app' }); return res.end(); }
   if (req.method === 'GET') {
-    if (!memberOf(req).error && !u.searchParams.get('why')) { res.writeHead(302, { Location: '/app' }); return res.end(); }
+    if (!memberOf(req).error && !u.searchParams.get('why')) { res.writeHead(302, { Location: safeNext(u.searchParams.get('next')) || '/app' }); return res.end(); }
     res.writeHead(200, { ...SEC, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return res.end(gatePage(u.searchParams.get('why') || ''));
+    return res.end(gatePage(u.searchParams.get('why') || '', u.searchParams.get('next') || ''));
   }
   if (req.method !== 'POST') return fail(res, 405, 'GET or POST only');
   const site = req.headers['sec-fetch-site']; if (site && site !== 'same-origin') return fail(res, 403, 'Same-origin requests only');
   const ip = clientIp(req), now = Date.now();
   let t = tries.get(ip); if (!t || t.reset < now) { t = { n: 0, reset: now + 15 * 60000 }; tries.set(ip, t); }
   if (t.n >= 10) return sendJson(res, 429, { error: 'Too many wrong attempts. Please try again in a few minutes.' });
-  let code = '';
-  try { const raw = await readBody(req); try { code = JSON.parse(raw).code; } catch { code = new URLSearchParams(raw).get('code'); } } catch { return sendJson(res, 400, { error: 'Bad request' }); }
+  let code = '', nextP = '';
+  try { const raw = await readBody(req); try { const j = JSON.parse(raw); code = j.code; nextP = j.next; } catch { const q = new URLSearchParams(raw); code = q.get('code'); nextP = q.get('next'); } } catch { return sendJson(res, 400, { error: 'Bad request' }); }
   const h = hashCode(code);
   let found = null; for (const x of HASHES) if (crypto.timingSafeEqual(h, x.hash)) found = x.m;   // checks every code, so timing reveals nothing
   if (!found || !normCode(code)) { t.n++; console.log('[access] wrong code from ' + ip); return sendJson(res, 401, { error: 'That code is not valid.' }); }
   if (found.paused) return sendJson(res, 401, { error: WHY.paused });
   if (Date.now() > expOf(found)) return sendJson(res, 401, { error: 'This code expired on ' + dateStr(found.expires) + '.' });
-  let devs = DEVICES.get(found.fp); if (!devs) DEVICES.set(found.fp, devs = new Map());
-  pruneDevices(devs);
-  const old = verify(cookieOf(req, 'mmn_session'));
-  let device = old && old.f === found.fp && (old.e | 0) === (found.epoch | 0) && devs.has(old.d) ? old.d : null;   // same browser signing in again keeps its slot
-  if (!device) {
-    if (devs.size >= found.devices) { console.log('[access] ' + found.name + ' refused: device limit (' + found.devices + ')'); return sendJson(res, 401, { error: 'This code is already signed in on ' + found.devices + ' device' + (found.devices > 1 ? 's' : '') + '. Ask the owner to reset it.' }); }
-    device = crypto.randomBytes(8).toString('hex');
+  const ss = startSession(req, found);
+  if (ss.error) { console.log('[access] ' + found.name + ' refused: device limit (' + found.devices + ')'); return sendJson(res, 401, { error: ss.error }); }
+  console.log('[access] sign-in ok member=' + found.name + ' device=' + ss.device.slice(0, 4) + ' (' + ss.count + '/' + found.devices + ' devices)');
+  return sendJson(res, 200, { ok: true, next: safeNext(nextP) || '' }, { 'Set-Cookie': ss.cookie });
+}
+
+/* ---------- pair a TV with a phone ---------- */
+const PAIRS = new Map(), PAIRCODES = new Map(), pairStarts = new Map(), pairTries = new Map();
+setInterval(() => { const now = Date.now(); for (const [id, p] of PAIRS) if (p.exp < now) { PAIRS.delete(id); PAIRCODES.delete(p.code); } }, 30000).unref();
+function newPairCode() { for (;;) { const b = crypto.randomBytes(6); let c = ''; for (const x of b) c += ALPHA[x % ALPHA.length]; if (!PAIRCODES.has(c)) return c; } }
+function pairFromCode(raw) { const code = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), id = PAIRCODES.get(code), p = id && PAIRS.get(id); return p && p.exp > Date.now() ? p : null; }
+async function handlePair(req, res, u) {
+  if (!gateOn()) return fail(res, 404, 'Not found');
+  if (u.pathname === '/pair/start' && req.method === 'POST') {
+    const site = req.headers['sec-fetch-site']; if (site && site !== 'same-origin') return fail(res, 403, 'Same-origin requests only');
+    const ip = clientIp(req), now = Date.now(); let t = pairStarts.get(ip); if (!t || t.reset < now) { t = { n: 0, reset: now + 60000 }; pairStarts.set(ip, t); }
+    if (++t.n > 8) return sendJson(res, 429, { error: 'Too many tries. Please wait a minute.' });
+    if (PAIRS.size > 2000) return sendJson(res, 503, { error: 'Busy. Try again in a moment.' });
+    const id = crypto.randomBytes(18).toString('base64url'), code = newPairCode();
+    PAIRS.set(id, { id, code, label: deviceLabel(req.headers['user-agent']), created: now, exp: now + 600000, state: 'waiting', fp: null, epoch: 0 }); PAIRCODES.set(code, id);
+    return sendJson(res, 200, { id, code, ttl: 600 });
   }
-  devs.set(device, Date.now());
-  const ttl = Math.max(60, Math.min(30 * 86400, Math.floor((expOf(found) - Date.now()) / 1000)));
-  console.log('[access] sign-in ok member=' + found.name + ' device=' + device.slice(0, 4) + ' (' + devs.size + '/' + found.devices + ' devices)');
-  return sendJson(res, 200, { ok: true }, { 'Set-Cookie': setCookie(req, 'mmn_session', sign({ f: found.fp, d: device, e: found.epoch | 0 }), ttl) });
+  if (u.pathname === '/pair/poll' && req.method === 'GET') {
+    const p = PAIRS.get(u.searchParams.get('id') || '');
+    if (!p || p.exp < Date.now()) return sendJson(res, 200, { state: 'expired' });
+    if (p.state !== 'approved') return sendJson(res, 200, { state: 'waiting' });
+    PAIRS.delete(p.id); PAIRCODES.delete(p.code);                       // a code works once
+    const m = BYFP.get(p.fp);
+    if (!m || m.paused || Date.now() > expOf(m) || (m.epoch | 0) !== (p.epoch | 0)) return sendJson(res, 200, { state: 'expired' });
+    const ss = startSession(req, m);
+    if (ss.error) return sendJson(res, 200, { state: 'devices', error: ss.error });
+    console.log('[access] TV paired member=' + m.name + ' device=' + ss.device.slice(0, 4));
+    return sendJson(res, 200, { state: 'ok' }, { 'Set-Cookie': ss.cookie });
+  }
+  return fail(res, 404, 'Not found');
+}
+
+/* ---------- My access page + continue on another device ---------- */
+const HAND = new Map();   // token -> { fp, data, exp }
+setInterval(() => { const now = Date.now(); for (const [k, v] of HAND) if (v.exp < now) HAND.delete(k); }, 60000).unref();
+function meInfo(w) {
+  const e = w.entry, devs = DEVICES.get(e.fp) || new Map(); pruneDevices(devs);
+  const list = [...devs.entries()].map(([id, t]) => { const mt = DEVMETA.get(id) || {}; return { id, label: mt.label || 'Device', last: t, first: mt.first || null, current: id === w.device }; }).sort((a, b) => (b.current - a.current) || (b.last - a.last));
+  return { name: e.name, expires: e.expires, limit: e.devices, screens: e.screens, usage: usageOf(e), devices: list, now: Date.now() };
+}
+async function handleMe(req, res, u, w) {
+  const p = u.pathname;
+  if (req.method !== 'GET') { const site = req.headers['sec-fetch-site']; if ((site && site !== 'same-origin') || req.headers['x-me'] !== '1') return fail(res, 403, 'Not allowed'); }
+  const ip = clientIp(req), now = Date.now();
+  const bad = () => { let t = pairTries.get(ip); if (!t || t.reset < now) { t = { n: 0, reset: now + 15 * 60000 }; pairTries.set(ip, t); } t.n++; };
+  const blocked = () => { const t = pairTries.get(ip); return t && t.reset >= now && t.n >= 12; };
+  try {
+    if (p === '/me/api' && req.method === 'GET') return sendJson(res, 200, meInfo(w));
+    if (p === '/me/api/device/remove' && req.method === 'POST') {
+      const id = String(JSON.parse(await readBody(req) || '{}').id || '');
+      if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('Bad device');
+      const devs = DEVICES.get(w.entry.fp); if (!devs || !devs.has(id)) throw new Error('That device is not on the list any more');
+      devs.delete(id); DEVMETA.delete(id); const rv = w.entry.revoked || (w.entry.revoked = []); rv.push(id); if (rv.length > 100) rv.shift();
+      killDevice(w.entry.fp, id); saveStore(); console.log('[access] ' + w.entry.name + ' removed a device');
+      return sendJson(res, 200, { ok: true, self: id === w.device });
+    }
+    if ((p === '/me/api/pair/lookup' || p === '/me/api/pair/approve') && req.method === 'POST') {
+      if (blocked()) return sendJson(res, 429, { error: 'Too many wrong codes. Try again in a few minutes.' });
+      const pr = pairFromCode(JSON.parse(await readBody(req) || '{}').code);
+      if (!pr || pr.state === 'approved') { bad(); throw new Error('That code was not found. It may have expired. Ask the TV for a new one.'); }
+      if (p.endsWith('lookup')) return sendJson(res, 200, { ok: true, label: pr.label, age: Math.round((now - pr.created) / 1000) });
+      const devs = DEVICES.get(w.entry.fp) || new Map(); pruneDevices(devs);
+      if (devs.size >= w.entry.devices) throw new Error('Your code is already on its limit of ' + w.entry.devices + ' device' + (w.entry.devices > 1 ? 's' : '') + '. Remove one above first.');
+      pr.state = 'approved'; pr.fp = w.entry.fp; pr.epoch = w.entry.epoch | 0;
+      console.log('[access] ' + w.entry.name + ' approved a TV'); return sendJson(res, 200, { ok: true });
+    }
+    if (p === '/me/api/handoff' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req) || '{}');
+      if (!['live', 'movie', 'episode'].includes(b.kind)) throw new Error('Bad request');
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(String(b.id || '')) || !/^[a-z0-9]{2,5}$/.test(String(b.ext || ''))) throw new Error('This title cannot be sent. Handoff works with Xtream logins.');
+      const data = { kind: b.kind, id: String(b.id), ext: String(b.ext), name: String(b.name || '').slice(0, 120), series: String(b.series || '').slice(0, 120), pos: Math.max(0, Math.min(864000, Math.floor(+b.pos || 0))) };
+      const mine = [...HAND.entries()].filter(([, v]) => v.fp === w.entry.fp); if (mine.length >= 20) HAND.delete(mine[0][0]);
+      const token = crypto.randomBytes(12).toString('base64url'); HAND.set(token, { fp: w.entry.fp, data, exp: now + 15 * 60000 });
+      return sendJson(res, 200, { ok: true, token, path: '/h/' + token, ttl: 900 });
+    }
+    const hm = /^\/me\/api\/handoff\/([A-Za-z0-9_-]{6,40})$/.exec(p);
+    if (hm && req.method === 'GET') {
+      const v = HAND.get(hm[1]); if (!v || v.exp < now || v.fp !== w.entry.fp) return sendJson(res, 404, { error: 'This link has expired, or it belongs to another member.' });
+      return sendJson(res, 200, { ok: true, ...v.data });
+    }
+    return sendJson(res, 404, { error: 'Not found' });
+  } catch (e) { return sendJson(res, 400, { error: e.message || 'Bad request' }); }
+}
+function staticText(key, text) {           // like staticPage, for pages kept inside this file
+  let c = STATIC.get(key);
+  if (!c) { const buf = Buffer.from(text); c = { mtime: 0, raw: buf, gz: zlib.gzipSync(buf, { level: 9 }), br: zlib.brotliCompressSync(buf, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } }), etag: 'W/"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"' }; STATIC.set(key, c); }
+  return c;
 }
 
 /* ---------- admin ---------- */
@@ -552,19 +728,25 @@ async function handle(req, res) {
   if (u.pathname === '/' || u.pathname === '/index.html') {
     try { return sendStatic(req, res, staticPage('landing.html'), 'text/html; charset=utf-8'); } catch { return fail(res, 500, 'landing.html not found'); }
   }
+  if (u.pathname === '/qr.js') { res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }); return res.end(QR_JS); }
+  if (u.pathname.startsWith('/pair/')) return handlePair(req, res, u);
+  if (!gateOn() && (u.pathname === '/me' || u.pathname.startsWith('/me/'))) { res.writeHead(302, { Location: '/app' }); return res.end(); }
   if (u.pathname === '/admin' || u.pathname.startsWith('/admin/')) return handleAdmin(req, res, u);
   if (u.pathname === '/gate') return handleGate(req, res, u);
   if (u.pathname === '/logout') { res.writeHead(302, { Location: '/gate', 'Set-Cookie': setCookie(req, 'mmn_session', '', 0), 'Cache-Control': 'no-store' }); return res.end(); }
   let who = null;
   if (gateOn()) {
-    if (u.pathname === '/app' || u.pathname === '/proxy' || u.pathname === '/diag' || u.pathname === '/session') {
+    const isHand = /^\/h\/[A-Za-z0-9_-]{6,40}$/.test(u.pathname), isPage = u.pathname === '/app' || u.pathname === '/me' || isHand, isMeApi = u.pathname.startsWith('/me/api');
+    if (isPage || isMeApi || u.pathname === '/proxy' || u.pathname === '/diag' || u.pathname === '/session') {
       const m = memberOf(req);
       if (m.error) {
-        if (u.pathname === '/app') { res.writeHead(302, { Location: m.error === 'login' ? '/gate' : '/gate?why=' + m.error, 'Cache-Control': 'no-store' }); return res.end(); }
+        if (isPage) { res.writeHead(302, { Location: gateUrl(u.pathname === '/me' ? '/me' + u.search : u.pathname, m.error), 'Cache-Control': 'no-store' }); return res.end(); }
         res.writeHead(401, { ...SEC, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         return res.end(JSON.stringify({ error: m.error }));
       }
       who = m;
+      if (isMeApi) return handleMe(req, res, u, m);
+      if (u.pathname === '/me') return sendStatic(req, res, staticText('me.html', ME_HTML), 'text/html; charset=utf-8');
     }
   } else if (!authed(req)) { res.writeHead(401, { ...SEC, 'WWW-Authenticate': 'Basic realm="IPTV Player"' }); return res.end('Password required'); }
   if (u.pathname === '/session') {
@@ -675,7 +857,7 @@ async function handle(req, res) {
     return;
   }
 
-  if (u.pathname === '/app') {
+  if (u.pathname === '/app' || /^\/h\/[A-Za-z0-9_-]{6,40}$/.test(u.pathname)) {
     try { return sendStatic(req, res, staticPage('iptv-player.html', h => h.replace('<head>', '<head>\n<script>window.IPTV_PROXY=true</script>')), 'text/html; charset=utf-8'); } catch { return fail(res, 500, 'iptv-player.html not found'); }
   }
   fail(res, 404, 'Not found');
